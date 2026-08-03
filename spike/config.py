@@ -30,16 +30,12 @@ KITE_USER_ID = os.getenv("KITE_USER_ID")
 KITE_PASSWORD = os.getenv("KITE_PASSWORD")
 KITE_TOTP_SECRET = os.getenv("KITE_TOTP_SECRET")
 
-# Local 1-min history: default points at ORB's local cache on this box (read-only).
-# Falls back to spike's own CACHE_DIR (backfilled via Kite historical_data) for
-# any ticker/timeframe where that isn't present or isn't deep enough.
-EXTERNAL_DATA_DIR = _env("SPIKE_EXTERNAL_DATA_DIR", "/home/ubuntu/orb/data")
-
 DISCORD_WEBHOOK_URL = _env("SPIKE_DISCORD_WEBHOOK_URL")
 
-# Which timeframes to scan live. 1D needs its own deeper backfill (see data_feed) --
-# leave it out by default until that backfill has actually been run once.
-TIMEFRAMES = [tf.strip() for tf in _env("SPIKE_TIMEFRAMES", "5min,15min,1h").split(",") if tf.strip()]
+# Which timeframes to scan live. Both intraday (resampled from spike's own
+# 1-min cache) and 1D (fetched natively at day interval -- see data_feed) are
+# backfilled and maintained entirely by spike itself.
+TIMEFRAMES = [tf.strip() for tf in _env("SPIKE_TIMEFRAMES", "5min,15min,1h,1D").split(",") if tf.strip()]
 
 # Universe override: comma-separated tickers. Empty = auto-discover from
 # kite.instruments() (current NFO futures underlyings), same as ORB does.

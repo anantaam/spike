@@ -11,26 +11,26 @@ validated result of a historical study across the full F&O universe on
 5min/15min/1h/1D — see `spike/detector.py` and `spike/config.py` for the
 settled thresholds.
 
-## How it reuses another project's Kite session (and how it doesn't need to)
+## Data independence
 
-`spike/kite_session.py` tries, in order:
+All historical and live candle data — 1-min (for 5min/15min/1h) and native
+daily bars (for 1D) — is backfilled via `kite.historical_data()` straight
+into spike's own `data_cache/`, and kept current from there every scan
+cycle. Nothing from any other project's directory is ever read. Deleting any
+sibling project on this box does not affect spike.
+
+The one deliberate exception is the Kite *session* (`spike/kite_session.py`),
+purely as a startup-time optimization, not a dependency:
 1. A shared token file at `SPIKE_KITE_TOKEN_FILE` (e.g. another project's
-   already-logged-in session) — read-only, never writes there.
+   already-logged-in session) — read-only, never written to.
 2. Its own previously-persisted token (`state/kite_token.json`).
 3. A full independent TOTP login, if `KITE_API_KEY`/`KITE_API_SECRET`/
    `KITE_USER_ID`/`KITE_PASSWORD`/`KITE_TOTP_SECRET` are set — and persists
    its own token afterward.
 
-Same idea for historical data (`spike/data_feed.py`): reads a sibling
-project's local 1-min CSVs at `SPIKE_EXTERNAL_DATA_DIR` if present and deep
-enough, otherwise backfills its own cache under `data_cache/` via
-`kite.historical_data()`. Nothing outside `spike`'s own directory is ever
-written to.
-
-This means: on this box, `spike` piggybacks on `orb`'s live session and data
-with zero duplicated secrets. On a fresh box with no sibling project, point
-those two paths at anything that won't exist and fill in the `KITE_*` creds
-instead — the code path is identical either way.
+If step 1's file doesn't exist (e.g. a sibling project was deleted, or a
+fresh box), spike just logs in itself via step 3 and carries on — nothing
+else changes.
 
 ## Deploying on a (this or another) box
 
@@ -57,11 +57,13 @@ set -a; source .env; set +a
 
 See `.env.example` for every variable. The ones worth knowing:
 
-- `SPIKE_TIMEFRAMES` — which timeframes to scan (default `5min,15min,1h`).
-  `1D` is deliberately left out by default: it needs history the local 1-min
-  cache doesn't have enough of (LEVEL_LOOKBACK=60 + BASE_MAX=40 daily bars —
-  roughly 4-6 months). Add it only once `data_feed`'s backfill has actually
-  been run with enough depth for daily.
+- `SPIKE_TIMEFRAMES` — which timeframes to scan (default `5min,15min,1h,1D`).
+  1D bars are fetched natively at day interval (not resampled from 1-min,
+  which isn't kept deep enough for that) and backfilled to ~450 calendar days
+  to comfortably clear LEVEL_LOOKBACK=60 + BASE_MAX=40 trading-day bars.
+  Scheduling is calendar-day based (fires once, ~10min after the 15:30 IST
+  close, within a same-day catch-up window), unlike the other timeframes'
+  minutes-since-midnight boundaries.
 - `SPIKE_UNIVERSE` — comma-separated ticker override. Empty = auto-discover
   current F&O underlyings from a fresh `kite.instruments()` call.
 - `SPIKE_HIST_DELAY` — seconds between `historical_data` calls during the
