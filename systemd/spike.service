@@ -1,0 +1,23 @@
+[Unit]
+Description=Spike breakout/retest scanner
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/spike
+Environment=PATH=/home/ubuntu/spike/venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/home/ubuntu/spike/.env
+
+ExecStart=/home/ubuntu/spike/venv/bin/python -m spike.main
+
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spike
+
+[Install]
+WantedBy=multi-user.target
