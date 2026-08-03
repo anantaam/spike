@@ -180,10 +180,16 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
         stop = row.zone_hi
         extension = row.zone_lo - df.loc[row.thrust_end:row.reversion_ts, "low"].min()
         target = entry - extension
+    # ponytail: thresholds are the full-universe validated cutoffs (top-5%
+    # vol_spike tail and slow-retest tail both showed materially worse
+    # reach-100% rates) -- revisit if the underlying detector params change.
+    bars_to_revert = int(hit.iloc[-1].bars_to_revert)
+    high_probability = row.vol_spike < 9.0 and bars_to_revert < 45
     return dict(
         ticker=ticker, tf=tf, direction=row.direction, retest_ts=str(last_ts),
         thrust_start=str(row.thrust_start), thrust_end=str(row.thrust_end),
         zone_lo=round(float(row.zone_lo), 2), zone_hi=round(float(row.zone_hi), 2),
         entry=round(float(entry), 2), stop=round(float(stop), 2), target=round(float(target), 2),
         extension_size=round(float(extension), 2), vol_spike=round(float(row.vol_spike), 2),
+        high_probability=high_probability,
     )

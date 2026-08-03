@@ -15,8 +15,9 @@ def send_alert(signal: dict) -> None:
         return
 
     arrow = "▲" if signal["direction"] == "bullish" else "▼"
+    tag = " ⭐HIGH PROBABILITY" if signal.get("high_probability") else ""
     msg = (
-        f"{arrow} **{signal['ticker']}** [{signal['tf']}] {signal['direction'].upper()} retest\n"
+        f"{arrow} **{signal['ticker']}** [{signal['tf']}] {signal['direction'].upper()} retest{tag}\n"
         f"zone: {signal['zone_lo']}-{signal['zone_hi']}  entry: {signal['entry']}  "
         f"stop: {signal['stop']}  target: {signal['target']}\n"
         f"thrust {signal['thrust_start']} -> {signal['thrust_end']}, "
