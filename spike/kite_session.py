@@ -28,7 +28,7 @@ def _try_reuse(token_path, api_key) -> KiteConnect | None:
         if api_key and data.get("api_key") not in (None, api_key):
             logger.info("Token at %s is for a different api_key -- skipping", token_path)
             return None
-        kite = KiteConnect(api_key=data["api_key"])
+        kite = KiteConnect(api_key=data["api_key"], timeout=config.KITE_TIMEOUT_SECONDS)
         kite.set_access_token(data["access_token"])
         kite.profile()  # validate it's actually live before trusting it
         logger.info("Reused Kite session from %s (age %.1fh)", token_path, age_hours)
@@ -59,23 +59,24 @@ def _independent_login() -> KiteConnect:
 
     pin = pyotp.TOTP(totp_secret).now()
     twofa = f"{int(pin):06d}" if len(pin) <= 5 else pin
-    kite = KiteConnect(api_key=api_key)
+    kite = KiteConnect(api_key=api_key, timeout=config.KITE_TIMEOUT_SECONDS)
     s = requests.Session()
+    to = config.KITE_TIMEOUT_SECONDS
 
-    r = s.get(kite.login_url(), allow_redirects=False)
+    r = s.get(kite.login_url(), allow_redirects=False, timeout=to)
     loc = r.headers["location"]
     sess_id = parse_qs(urlparse(loc).query)["sess_id"][0]
-    s.get(loc)
+    s.get(loc, timeout=to)
     s.get("https://kite.zerodha.com/api/connect/session",
-          params={"sess_id": sess_id, "api_key": api_key})
+          params={"sess_id": sess_id, "api_key": api_key}, timeout=to)
     r = s.post("https://kite.zerodha.com/api/login",
-               data={"user_id": user_id, "password": password, "type": "user_id"})
+               data={"user_id": user_id, "password": password, "type": "user_id"}, timeout=to)
     request_id = r.json()["data"]["request_id"]
     s.post("https://kite.zerodha.com/api/twofa",
            data={"user_id": user_id, "request_id": request_id, "twofa_value": twofa,
-                 "twofa_type": "totp", "skip_session": "true"})
+                 "twofa_type": "totp", "skip_session": "true"}, timeout=to)
     r = s.get("https://kite.zerodha.com/connect/finish",
-              params={"api_key": api_key, "sess_id": sess_id}, allow_redirects=False)
+              params={"api_key": api_key, "sess_id": sess_id}, allow_redirects=False, timeout=to)
     request_token = parse_qs(urlparse(r.headers["location"]).query)["request_token"][0]
     data = kite.generate_session(request_token, api_secret=api_secret)
     kite.set_access_token(data["access_token"])

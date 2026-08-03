@@ -105,6 +105,7 @@ def run():
 
     seen = _load_seen()
     last_run = {tf: None for tf in config.TIMEFRAMES}
+    last_heartbeat = None
 
     while True:
         if config.KILL_FILE.exists():
@@ -113,11 +114,22 @@ def run():
 
         now_ist = datetime.now(IST)
 
+        # A silent log is ambiguous between "nothing due" and "stuck" --
+        # print a heartbeat regardless, so a stall shows up as missing
+        # heartbeats rather than as indistinguishable silence.
+        if last_heartbeat is None or (now_ist - last_heartbeat) >= timedelta(minutes=5):
+            logger.info("heartbeat: market_open=%s tickers=%d", _is_market_open(now_ist), len(history))
+            last_heartbeat = now_ist
+
         due_intraday = []
         if intraday_tfs and _is_market_open(now_ist):
             for tf in intraday_tfs:
-                boundary = _boundary(now_ist, INTRADAY_TF_MINUTES[tf])
-                close_time = boundary + timedelta(minutes=INTRADAY_TF_MINUTES[tf])
+                # _boundary floors `now` to the tf grid -- that floor value IS
+                # the close time of the most recently completed candle. (A
+                # previous version added tf_minutes here, which instead gives
+                # the close of the candle still in progress -- a time that's
+                # always in the future, so `ready` could never fire.)
+                close_time = _boundary(now_ist, INTRADAY_TF_MINUTES[tf])
                 ready = now_ist >= close_time + timedelta(seconds=GRACE_SECONDS)
                 if ready and last_run.get(tf) != close_time:
                     due_intraday.append((tf, close_time))

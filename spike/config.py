@@ -58,6 +58,12 @@ LEVEL_TOL_ATR = 1.5
 # Kite historical_data rate limit: keep comfortably under Kite's ~3 req/sec cap
 HISTORICAL_REQUEST_DELAY_SECONDS = float(_env("SPIKE_HIST_DELAY", "0.35"))
 
+# Network timeout for every Kite API call. kiteconnect/requests default to no
+# timeout at all -- a single stalled connection (seen in practice: a
+# CLOSE-WAIT socket that never got read) then blocks this single-threaded
+# loop forever, silently, with no exception and no further log lines.
+KITE_TIMEOUT_SECONDS = float(_env("SPIKE_KITE_TIMEOUT", "20"))
+
 # Minimum bars needed before a timeframe is trusted for detection (must clear
 # LEVEL_LOOKBACK + BASE_MAX with margin)
 MIN_BARS_REQUIRED = LEVEL_LOOKBACK + BASE_MAX + 30
