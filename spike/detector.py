@@ -26,13 +26,35 @@ def _indicators(df):
     return df
 
 
-def _find_runs(strong):
+def _is_pause(o, h, l, c, atr, i):
+    """True if bar i can be bridged over inside an up-thrust run: still
+    green, body and total range both small relative to ATR, and doesn't
+    undercut the previous bar's low (no real give-back)."""
+    if i < 1 or np.isnan(atr[i]):
+        return False
+    body = c[i] - o[i]
+    if body <= 0 or body >= cfg.PAUSE_BODY_K * atr[i]:
+        return False
+    if (h[i] - l[i]) >= cfg.PAUSE_RANGE_K * atr[i]:
+        return False
+    if l[i] < l[i - 1]:
+        return False
+    return True
+
+
+def _find_runs(o, h, l, c, atr, strong):
     runs, n, i = [], len(strong), 0
     while i < n:
         if strong[i]:
             j = i
-            while j + 1 < n and strong[j + 1]:
-                j += 1
+            while True:
+                if j + 1 < n and strong[j + 1]:
+                    j += 1
+                    continue
+                if j + 2 < n and not strong[j + 1] and strong[j + 2] and _is_pause(o, h, l, c, atr, j + 1):
+                    j += 2
+                    continue
+                break
             if j - i + 1 <= cfg.MAX_RUN:
                 runs.append((i, j))
             i = j + 1
@@ -68,7 +90,7 @@ def _find_setups_one_side(df, ticker, tf):
     strong = np.zeros(n, dtype=bool)
     valid = ~np.isnan(atr)
     strong[valid] = (body[valid] > cfg.STRONG_K * atr[valid])
-    runs = _find_runs(strong)
+    runs = _find_runs(o, h, l, c, atr, strong)
 
     out = []
     for s, e in runs:
