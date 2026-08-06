@@ -15,9 +15,9 @@ def send_alert(signal: dict) -> None:
         return
 
     arrow = "▲" if signal["direction"] == "bullish" else "▼"
-    tags = ""
-    if signal.get("is_opening_thrust"):
-        tags += " 🌅OPENING"  # gap-driven thrust -- reach-100% 45.5% vs 57.7% for mid-session, and the exact candle where Kite/TradingView data most often disagree
+    # always state opening vs mid-session explicitly -- reach-100% 45.5% vs 57.7%,
+    # and the opening candle is the exact spot Kite/TradingView data most often disagree
+    tags = " 🌅OPENING" if signal.get("is_opening_thrust") else " 🕒MID SESSION"
     if signal.get("high_probability"):
         tags += " ⭐HIGH PROBABILITY"
     msg = (
