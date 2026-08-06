@@ -204,13 +204,15 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
         target = entry - extension
     # ponytail: thresholds are the full-universe validated cutoffs (top-5%
     # vol_spike tail and slow-retest tail both showed materially worse
-    # reach-100% rates; opening-candle thrusts showed reach-100% 45.5% vs
-    # 57.7% for mid-session ones -- gap-driven moves, more prone to "gap and
-    # fade", and the exact candle where Kite/TradingView data most often
-    # disagree) -- revisit if the underlying detector params change.
+    # reach-100% rates). is_opening_thrust is tracked and shown separately
+    # (reach-100% 45.5% vs 57.7% for mid-session -- gap-driven moves, more
+    # prone to "gap and fade", and the exact candle where Kite/TradingView
+    # data most often disagree) -- deliberately NOT combined into
+    # high_probability, so the two facts stay independently visible instead
+    # of one silently suppressing the other.
     bars_to_revert = int(hit.iloc[-1].bars_to_revert)
     is_opening_thrust = row.thrust_start.hour == 9 and row.thrust_start.minute == 15
-    high_probability = row.vol_spike < 9.0 and bars_to_revert < 45 and not is_opening_thrust
+    high_probability = row.vol_spike < 9.0 and bars_to_revert < 45
     return dict(
         ticker=ticker, tf=tf, direction=row.direction, retest_ts=str(last_ts),
         thrust_start=str(row.thrust_start), thrust_end=str(row.thrust_end),
