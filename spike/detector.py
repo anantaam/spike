@@ -214,6 +214,7 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
     return dict(
         ticker=ticker, tf=tf, direction=row.direction, retest_ts=str(last_ts),
         thrust_start=str(row.thrust_start), thrust_end=str(row.thrust_end),
+        is_opening_thrust=is_opening_thrust,
         zone_lo=round(float(row.zone_lo), 2), zone_hi=round(float(row.zone_hi), 2),
         entry=round(float(entry), 2), stop=round(float(stop), 2), target=round(float(target), 2),
         extension_size=round(float(extension), 2), vol_spike=round(float(row.vol_spike), 2),
