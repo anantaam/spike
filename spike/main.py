@@ -78,6 +78,9 @@ def _check_and_alert(ticker: str, tf: str, tdf, seen: set) -> int:
         return 0
     seen.add(key)
     logger.info("SIGNAL %s", signal)
+    if signal.get("is_opening_thrust"):
+        logger.info("suppressed opening-thrust alert for %s/%s", ticker, tf)
+        return 0
     notifier.send_alert(signal)
     return 1
 
