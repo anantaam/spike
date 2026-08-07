@@ -25,11 +25,24 @@ def _own_daily_path(ticker: str) -> Path:
     return config.CACHE_DIR / f"{ticker}_daily.csv"
 
 
+_NIFTY500_FILE = Path(__file__).resolve().parent / "nifty500_constituents.txt"
+
+
 def discover_universe(kite) -> list[str]:
-    """F&O-underlying equity symbols. Override via SPIKE_UNIVERSE, else derive
-    from a fresh kite.instruments() call."""
+    """Nifty 500 constituents (a static list -- validated against this exact
+    set; the index only reconstitutes semi-annually, so a static file is more
+    robust than a live scrape/API dependency). Override via SPIKE_UNIVERSE.
+    Falls back to F&O-underlying derivation via kite.instruments() if the
+    file is missing, for portability to a box without it."""
     if config.UNIVERSE_OVERRIDE:
         return config.UNIVERSE_OVERRIDE
+
+    if _NIFTY500_FILE.exists():
+        names = [line.strip() for line in _NIFTY500_FILE.read_text().splitlines() if line.strip()]
+        if names:
+            logger.info("Universe: %d Nifty 500 constituents from %s", len(names), _NIFTY500_FILE.name)
+            return names
+        logger.warning("%s exists but is empty -- falling back to F&O derivation", _NIFTY500_FILE.name)
 
     instruments = kite.instruments("NFO")
     names = sorted({
@@ -38,8 +51,8 @@ def discover_universe(kite) -> list[str]:
         if r.get("instrument_type") == "FUT"
     })
     if not names:
-        raise RuntimeError("kite.instruments('NFO') returned no FUT rows -- cannot build a universe")
-    logger.info("Universe: %d F&O underlyings from kite.instruments()", len(names))
+        raise RuntimeError("No nifty500_constituents.txt and kite.instruments('NFO') returned no FUT rows")
+    logger.info("Universe: %d F&O underlyings from kite.instruments() (fallback)", len(names))
     return names
 
 

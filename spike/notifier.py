@@ -25,7 +25,8 @@ def send_alert(signal: dict) -> None:
         f"zone: {signal['zone_lo']}-{signal['zone_hi']}  entry: {signal['entry']}  "
         f"stop: {signal['stop']}  target: {signal['target']}\n"
         f"thrust {signal['thrust_start']} -> {signal['thrust_end']}, "
-        f"retest {signal['retest_ts']}, vol_spike {signal['vol_spike']}x"
+        f"retest {signal['retest_ts']}, vol_spike {signal['vol_spike']}x, "
+        f"thrust/zone {signal['thrust_to_zone_ratio']}x"
     )
     try:
         req = urllib.request.Request(

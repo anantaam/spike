@@ -192,6 +192,8 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
         return None
     row = hit.iloc[-1]
     zone_height = row.zone_hi - row.zone_lo
+    thrust_move = abs(df.loc[row.thrust_end, "close"] - df.loc[row.thrust_start, "open"])
+    thrust_to_zone_ratio = thrust_move / zone_height if zone_height > 0 else float("nan")
     if row.direction == "bullish":
         entry = df.loc[last_ts, "low"]
         stop = row.zone_lo
@@ -220,5 +222,6 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
         zone_lo=round(float(row.zone_lo), 2), zone_hi=round(float(row.zone_hi), 2),
         entry=round(float(entry), 2), stop=round(float(stop), 2), target=round(float(target), 2),
         extension_size=round(float(extension), 2), vol_spike=round(float(row.vol_spike), 2),
+        thrust_to_zone_ratio=round(float(thrust_to_zone_ratio), 2),
         high_probability=high_probability,
     )
