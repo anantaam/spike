@@ -41,6 +41,23 @@ TIMEFRAMES = [tf.strip() for tf in _env("SPIKE_TIMEFRAMES", "5min,15min,1h,1D").
 # kite.instruments() (current NFO futures underlyings), same as ORB does.
 UNIVERSE_OVERRIDE = [t.strip().upper() for t in _env("SPIKE_UNIVERSE").split(",") if t.strip()]
 
+# MCX commodity underlyings to scan (majors only -- mini/micro/guinea/petal
+# variants of the same commodity are deliberately excluded, they just
+# duplicate the same price action at a smaller lot size). Intraday only
+# (5min/15min/1h): a front-month contract rarely accumulates the ~130
+# trading days of daily history the detector needs for 1D before it rolls
+# to the next month, so 1D is not wired up for commodities.
+COMMODITY_UNIVERSE = [c.strip().upper() for c in _env(
+    "SPIKE_COMMODITIES", "GOLD,SILVER,CRUDEOIL,NATURALGAS,COPPER,ZINC,ALUMINIUM,LEAD,NICKEL"
+).split(",") if c.strip()]
+
+# MCX session: 9:00 to 23:30 IST, extended to 23:55 during US daylight saving
+# (~mid-Mar to early-Nov) since MCX aligns its close with COMEX/NYMEX hours.
+# Approximated by calendar month rather than the exact DST transition date --
+# off by at most ~1-2 weeks at the March/November edges.
+MCX_OPEN_HM = (9, 0)
+MCX_DST_MONTHS = {3, 4, 5, 6, 7, 8, 9, 10, 11}
+
 KILL_FILE = BASE_DIR / "KILL"  # touch this file to stop the service gracefully
 
 # --- detector thresholds (settled values from the historical validation pass) ---

@@ -49,6 +49,17 @@ def _is_market_open(now_ist: datetime) -> bool:
     return (t.hour, t.minute) >= (9, 15) and (t.hour, t.minute) <= (15, 30)
 
 
+def _mcx_close_hm(now_ist: datetime) -> tuple[int, int]:
+    return (23, 55) if now_ist.month in config.MCX_DST_MONTHS else (23, 30)
+
+
+def _is_mcx_open(now_ist: datetime) -> bool:
+    if now_ist.weekday() >= 5:
+        return False
+    t = now_ist.time()
+    return (t.hour, t.minute) >= config.MCX_OPEN_HM and (t.hour, t.minute) <= _mcx_close_hm(now_ist)
+
+
 def _boundary(now_ist: datetime, tf_minutes: int) -> datetime:
     total = now_ist.hour * 60 + now_ist.minute
     floored = (total // tf_minutes) * tf_minutes
@@ -65,9 +76,10 @@ def _daily_bar_ready(now_ist: datetime) -> bool:
     return close_dt + timedelta(minutes=EOD_GRACE_MINUTES) <= now_ist <= window_end
 
 
-def _check_and_alert(ticker: str, tf: str, tdf, seen: set) -> int:
+def _check_and_alert(ticker: str, tf: str, tdf, seen: set,
+                      session_open_hm: tuple[int, int] = (9, 15)) -> int:
     try:
-        signal = detector.latest_signal(tdf, ticker, tf)
+        signal = detector.latest_signal(tdf, ticker, tf, session_open_hm=session_open_hm)
     except Exception as exc:
         logger.warning("detector failed for %s/%s (%s)", ticker, tf, exc)
         return 0
@@ -89,9 +101,11 @@ def run():
     logger.info("spike starting up")
     kite = kite_session.login_or_reuse()
     universe = data_feed.discover_universe(kite)
+    commodity_map = data_feed.discover_commodity_contracts(kite)  # {name: tradingsymbol}
     intraday_tfs = [tf for tf in config.TIMEFRAMES if tf in INTRADAY_TF_MINUTES]
     want_daily = "1D" in config.TIMEFRAMES
-    logger.info("universe: %d tickers, timeframes: %s", len(universe), config.TIMEFRAMES)
+    logger.info("universe: %d equity tickers, %d commodity contracts, timeframes: %s",
+                len(universe), len(commodity_map), config.TIMEFRAMES)
 
     history = {}
     daily_history = {}
@@ -106,6 +120,15 @@ def run():
         if i % 40 == 0:
             logger.info("preloaded %d/%d tickers", i, len(universe))
 
+    commodity_history = {}
+    for ticker in commodity_map.values():
+        try:
+            commodity_history[ticker] = data_feed.get_1min_history(kite, ticker)
+        except Exception as exc:
+            logger.warning("Could not load history for %s (%s) -- skipping", ticker, exc)
+    logger.info("preloaded %d/%d commodity contracts", len(commodity_history), len(commodity_map))
+
+    last_commodity_discovery = datetime.now(IST).date()
     seen = _load_seen()
     last_run = {tf: None for tf in config.TIMEFRAMES}
     last_heartbeat = None
@@ -117,15 +140,37 @@ def run():
 
         now_ist = datetime.now(IST)
 
+        if now_ist.date() != last_commodity_discovery:
+            last_commodity_discovery = now_ist.date()
+            try:
+                new_map = data_feed.discover_commodity_contracts(kite)
+            except Exception as exc:
+                logger.warning("commodity contract re-discovery failed (%s)", exc)
+                new_map = commodity_map
+            for name, sym in new_map.items():
+                if commodity_map.get(name) != sym:
+                    old_sym = commodity_map.get(name)
+                    logger.info("MCX contract roll for %s: %s -> %s", name, old_sym, sym)
+                    commodity_history.pop(old_sym, None)
+                    try:
+                        commodity_history[sym] = data_feed.get_1min_history(kite, sym)
+                    except Exception as exc:
+                        logger.warning("Could not load history for rolled contract %s (%s)", sym, exc)
+            commodity_map = new_map
+
+        equity_open = _is_market_open(now_ist)
+        mcx_open = _is_mcx_open(now_ist)
+
         # A silent log is ambiguous between "nothing due" and "stuck" --
         # print a heartbeat regardless, so a stall shows up as missing
         # heartbeats rather than as indistinguishable silence.
         if last_heartbeat is None or (now_ist - last_heartbeat) >= timedelta(minutes=5):
-            logger.info("heartbeat: market_open=%s tickers=%d", _is_market_open(now_ist), len(history))
+            logger.info("heartbeat: equity_open=%s mcx_open=%s tickers=%d commodities=%d",
+                        equity_open, mcx_open, len(history), len(commodity_history))
             last_heartbeat = now_ist
 
         due_intraday = []
-        if intraday_tfs and _is_market_open(now_ist):
+        if intraday_tfs and (equity_open or mcx_open):
             for tf in intraday_tfs:
                 # _boundary floors `now` to the tf grid -- that floor value IS
                 # the close time of the most recently completed candle. (A
@@ -141,17 +186,29 @@ def run():
                      and last_run.get("1D") != now_ist.date().isoformat())
 
         if due_intraday:
-            for ticker in list(history.keys()):
-                try:
-                    history[ticker] = data_feed.refresh_latest(kite, ticker, history[ticker])
-                except Exception as exc:
-                    logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
+            if equity_open:
+                for ticker in list(history.keys()):
+                    try:
+                        history[ticker] = data_feed.refresh_latest(kite, ticker, history[ticker])
+                    except Exception as exc:
+                        logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
+            if mcx_open:
+                for ticker in list(commodity_history.keys()):
+                    try:
+                        commodity_history[ticker] = data_feed.refresh_latest(kite, ticker, commodity_history[ticker])
+                    except Exception as exc:
+                        logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
 
             for tf, close_time in due_intraday:
                 new_alerts = 0
-                for ticker, df1 in history.items():
-                    tdf = data_feed.resample(df1, tf)
-                    new_alerts += _check_and_alert(ticker, tf, tdf, seen)
+                if equity_open:
+                    for ticker, df1 in history.items():
+                        tdf = data_feed.resample(df1, tf)
+                        new_alerts += _check_and_alert(ticker, tf, tdf, seen)
+                if mcx_open:
+                    for ticker, df1 in commodity_history.items():
+                        tdf = data_feed.resample(df1, tf)
+                        new_alerts += _check_and_alert(ticker, tf, tdf, seen, session_open_hm=config.MCX_OPEN_HM)
                 last_run[tf] = close_time
                 logger.info("scanned tf=%s at %s, %d new alert(s)", tf, close_time, new_alerts)
             _save_seen(seen)

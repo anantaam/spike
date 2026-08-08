@@ -56,6 +56,41 @@ def discover_universe(kite) -> list[str]:
     return names
 
 
+def discover_commodity_contracts(kite) -> dict[str, str]:
+    """Maps each name in config.COMMODITY_UNIVERSE to its currently active
+    (nearest-expiry, unexpired) MCX FUT contract tradingsymbol, and seeds
+    the shared instrument-token cache with it -- so get_1min_history /
+    refresh_latest etc. work against it completely unchanged, exactly as
+    they do for an NSE equity ticker. Call again periodically (daily is
+    enough): contracts expire monthly, so the active tradingsymbol for a
+    given name changes over time and callers need to notice the rollover."""
+    instruments = kite.instruments("MCX")
+    today = pd.Timestamp.now().date()
+    by_name: dict[str, list] = {}
+    for r in instruments:
+        if r.get("instrument_type") != "FUT":
+            continue
+        name = (r.get("name") or "").strip().upper()
+        if name not in config.COMMODITY_UNIVERSE:
+            continue
+        expiry = r.get("expiry")
+        if not expiry or expiry < today:
+            continue
+        by_name.setdefault(name, []).append(r)
+
+    mapping = {}
+    for name, rows in by_name.items():
+        active = min(rows, key=lambda r: r["expiry"])
+        mapping[name] = active["tradingsymbol"]
+        _instrument_token_cache[active["tradingsymbol"]] = active["instrument_token"]
+
+    missing = set(config.COMMODITY_UNIVERSE) - mapping.keys()
+    if missing:
+        logger.warning("No active MCX contract found for: %s", sorted(missing))
+    logger.info("MCX contracts: %s", mapping)
+    return mapping
+
+
 def _get_instrument_token(kite, ticker: str) -> int | None:
     if ticker in _instrument_token_cache:
         return _instrument_token_cache[ticker]

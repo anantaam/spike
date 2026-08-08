@@ -178,7 +178,8 @@ def clean(setups: pd.DataFrame) -> pd.DataFrame:
                    (setups.vol_slope < 0) & (~setups.far_violation)]
 
 
-def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
+def latest_signal(df: pd.DataFrame, ticker: str, tf: str,
+                   session_open_hm: tuple[int, int] = (9, 15)) -> dict | None:
     """Live entry point: returns a single signal dict only if a clean setup's
     retest bar is the LAST bar in df (i.e. it just confirmed), else None."""
     if len(df) < cfg.MIN_BARS_REQUIRED:
@@ -213,7 +214,7 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str) -> dict | None:
     # high_probability, so the two facts stay independently visible instead
     # of one silently suppressing the other.
     bars_to_revert = int(hit.iloc[-1].bars_to_revert)
-    is_opening_thrust = row.thrust_start.hour == 9 and row.thrust_start.minute == 15
+    is_opening_thrust = (row.thrust_start.hour, row.thrust_start.minute) == session_open_hm
     high_probability = row.vol_spike < 9.0 and bars_to_revert < 45
     return dict(
         ticker=ticker, tf=tf, direction=row.direction, retest_ts=str(last_ts),
