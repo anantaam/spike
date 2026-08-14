@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import config, data_feed, detector, kite_session, notifier
+from . import config, data_feed, detector, kite_session, notifier, ob_detector
 
 IST = ZoneInfo("Asia/Kolkata")
 INTRADAY_TF_MINUTES = {"5min": 5, "15min": 15, "1h": 60}
@@ -95,6 +95,27 @@ def _check_and_alert(ticker: str, tf: str, tdf, seen: set,
         return 0
     notifier.send_alert(signal)
     return 1
+
+
+def _check_ob(ticker: str, tf: str, tdf, seen: set) -> int:
+    """Order blocks, scanned independently of the thrust-retest pattern."""
+    if not config.OB_ENABLED or tf not in config.OB_TIMEFRAMES:
+        return 0
+    try:
+        events = ob_detector.latest_events(tdf, ticker, tf)
+    except Exception as exc:
+        logger.warning("ob_detector failed for %s/%s (%s)", ticker, tf, exc)
+        return 0
+    sent = 0
+    for ev in events:
+        key = f"OB|{ticker}|{tf}|{ev['event']}|{ev['formation_ts']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        logger.info("OB %s", ev)
+        notifier.send_ob_alert(ev)
+        sent += 1
+    return sent
 
 
 def run():
@@ -200,17 +221,20 @@ def run():
                         logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
 
             for tf, close_time in due_intraday:
-                new_alerts = 0
+                new_alerts = ob_alerts = 0
                 if equity_open:
                     for ticker, df1 in history.items():
                         tdf = data_feed.resample(df1, tf)
                         new_alerts += _check_and_alert(ticker, tf, tdf, seen)
+                        ob_alerts += _check_ob(ticker, tf, tdf, seen)
                 if mcx_open:
                     for ticker, df1 in commodity_history.items():
                         tdf = data_feed.resample(df1, tf)
                         new_alerts += _check_and_alert(ticker, tf, tdf, seen, session_open_hm=config.MCX_OPEN_HM)
+                        ob_alerts += _check_ob(ticker, tf, tdf, seen)
                 last_run[tf] = close_time
-                logger.info("scanned tf=%s at %s, %d new alert(s)", tf, close_time, new_alerts)
+                logger.info("scanned tf=%s at %s, %d new alert(s), %d OB alert(s)",
+                            tf, close_time, new_alerts, ob_alerts)
             _save_seen(seen)
 
         if daily_due:
@@ -220,12 +244,14 @@ def run():
                 except Exception as exc:
                     logger.warning("refresh_daily failed for %s (%s)", ticker, exc)
 
-            new_alerts = 0
+            new_alerts = ob_alerts = 0
             for ticker, ddf in daily_history.items():
                 new_alerts += _check_and_alert(ticker, "1D", ddf, seen)
+                ob_alerts += _check_ob(ticker, "1D", ddf, seen)
             today_key = now_ist.date().isoformat()
             last_run["1D"] = today_key
-            logger.info("scanned tf=1D for %s, %d new alert(s)", today_key, new_alerts)
+            logger.info("scanned tf=1D for %s, %d new alert(s), %d OB alert(s)",
+                        today_key, new_alerts, ob_alerts)
             _save_seen(seen)
 
         time.sleep(POLL_SECONDS)

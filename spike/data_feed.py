@@ -28,31 +28,39 @@ def _own_daily_path(ticker: str) -> Path:
 _NIFTY500_FILE = Path(__file__).resolve().parent / "nifty500_constituents.txt"
 
 
-def discover_universe(kite) -> list[str]:
-    """Nifty 500 constituents (a static list -- validated against this exact
-    set; the index only reconstitutes semi-annually, so a static file is more
-    robust than a live scrape/API dependency). Override via SPIKE_UNIVERSE.
-    Falls back to F&O-underlying derivation via kite.instruments() if the
-    file is missing, for portability to a box without it."""
-    if config.UNIVERSE_OVERRIDE:
-        return config.UNIVERSE_OVERRIDE
-
-    if _NIFTY500_FILE.exists():
-        names = [line.strip() for line in _NIFTY500_FILE.read_text().splitlines() if line.strip()]
-        if names:
-            logger.info("Universe: %d Nifty 500 constituents from %s", len(names), _NIFTY500_FILE.name)
-            return names
-        logger.warning("%s exists but is empty -- falling back to F&O derivation", _NIFTY500_FILE.name)
-
-    instruments = kite.instruments("NFO")
+def _fno_underlyings(kite) -> list[str]:
+    """Current F&O stock underlyings, derived live from the NFO instrument
+    dump. Index futures (NIFTY, BANKNIFTY, ...) come back too but have no
+    underlying equity token, so they get skipped downstream."""
     names = sorted({
         (r.get("name") or "").strip().upper()
-        for r in instruments
+        for r in kite.instruments("NFO")
         if r.get("instrument_type") == "FUT"
     })
     if not names:
-        raise RuntimeError("No nifty500_constituents.txt and kite.instruments('NFO') returned no FUT rows")
-    logger.info("Universe: %d F&O underlyings from kite.instruments() (fallback)", len(names))
+        raise RuntimeError("kite.instruments('NFO') returned no FUT rows")
+    return names
+
+
+def discover_universe(kite) -> list[str]:
+    """The scan universe, shared by both detectors. SPIKE_UNIVERSE wins if set;
+    otherwise SPIKE_UNIVERSE_SOURCE picks between the live F&O list (default)
+    and the static Nifty 500 file."""
+    if config.UNIVERSE_OVERRIDE:
+        logger.info("Universe: %d tickers from SPIKE_UNIVERSE override", len(config.UNIVERSE_OVERRIDE))
+        return config.UNIVERSE_OVERRIDE
+
+    if config.UNIVERSE_SOURCE == "nifty500":
+        if _NIFTY500_FILE.exists():
+            names = [ln.strip() for ln in _NIFTY500_FILE.read_text().splitlines() if ln.strip()]
+            if names:
+                logger.info("Universe: %d Nifty 500 constituents from %s", len(names), _NIFTY500_FILE.name)
+                return names
+        logger.warning("SPIKE_UNIVERSE_SOURCE=nifty500 but %s is missing/empty -- using F&O",
+                       _NIFTY500_FILE.name)
+
+    names = _fno_underlyings(kite)
+    logger.info("Universe: %d F&O underlyings from kite.instruments()", len(names))
     return names
 
 

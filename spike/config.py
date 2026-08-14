@@ -37,9 +37,15 @@ DISCORD_WEBHOOK_URL = _env("SPIKE_DISCORD_WEBHOOK_URL")
 # backfilled and maintained entirely by spike itself.
 TIMEFRAMES = [tf.strip() for tf in _env("SPIKE_TIMEFRAMES", "5min,15min,1h,1D").split(",") if tf.strip()]
 
-# Universe override: comma-separated tickers. Empty = auto-discover from
-# kite.instruments() (current NFO futures underlyings), same as ORB does.
+# Universe override: comma-separated tickers. Empty = auto-discover.
 UNIVERSE_OVERRIDE = [t.strip().upper() for t in _env("SPIKE_UNIVERSE").split(",") if t.strip()]
+
+# Which universe to scan: 'fno' derives the current F&O underlyings live from
+# kite.instruments("NFO") (~213 names); 'nifty500' reads the static
+# nifty500_constituents.txt (500 names). Applies to BOTH detectors -- they
+# share the same preloaded history. F&O is the default: liquid, optionable,
+# and small enough to keep alert volume readable.
+UNIVERSE_SOURCE = _env("SPIKE_UNIVERSE_SOURCE", "fno").strip().lower()
 
 # MCX commodity underlyings to scan (majors only -- mini/micro/guinea/petal
 # variants of the same commodity are deliberately excluded, they just
@@ -79,6 +85,23 @@ LEVEL_TOL_ATR = 1.5
 # better on every timeframe -- a clean addition, not a quality tradeoff.
 PAUSE_BODY_K = 1.0      # pause candle's body must be < this many ATRs
 PAUSE_RANGE_K = 3.0     # pause candle's total high-low range must be < this many ATRs
+
+# --- order block detector (ob_detector.py) -- independent of the above ---
+OB_ENABLED = _env("SPIKE_OB_ENABLED", "1") not in ("0", "false", "False")
+OB_TIMEFRAMES = [tf.strip() for tf in _env("SPIKE_OB_TIMEFRAMES", "5min,15min,1h,1D").split(",") if tf.strip()]
+OB_SWING_LEN = int(_env("SPIKE_OB_SWING_LEN", "10"))
+OB_USE_BODY = _env("SPIKE_OB_USE_BODY", "1") not in ("0", "false", "False")
+OB_ALERT_FORMATION = _env("SPIKE_OB_ALERT_FORMATION", "1") not in ("0", "false", "False")
+OB_ALERT_RETOUCH = _env("SPIKE_OB_ALERT_RETOUCH", "1") not in ("0", "false", "False")
+
+# Zone must be at least this thick (entry-to-stop as % of entry) to alert.
+# Round-trip cost is ~0.25%, and the median raw OB zone is ~0.21% -- i.e. most
+# of them cost more to trade than the whole risk unit is worth. Measured across
+# 838k historical blocks, outcomes improve monotonically with zone thickness.
+# This is also the main volume control: unfiltered, OB retouches fire ~1000x a
+# day across 500 names, which is unreadable.
+OB_MIN_RISK_PCT = float(_env("SPIKE_OB_MIN_RISK_PCT", "1.5"))
+OB_MIN_BARS = int(_env("SPIKE_OB_MIN_BARS", "120"))
 
 # Kite historical_data rate limit: keep comfortably under Kite's ~3 req/sec cap
 HISTORICAL_REQUEST_DELAY_SECONDS = float(_env("SPIKE_HIST_DELAY", "0.35"))
