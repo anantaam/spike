@@ -207,10 +207,10 @@ def _event(df, ticker, tf, z, kind):
 def latest_events(df: pd.DataFrame, ticker: str, tf: str) -> list[dict]:
     """Live entry point: events whose triggering bar is the LAST bar in df.
 
-    Returns formation and/or retouch events that just fired. A zone thinner
-    than OB_MIN_RISK_PCT is skipped -- with round-trip costs around 0.25%, a
-    zone that tight has less edge than it costs to trade, and most raw OB
-    zones are far tighter than that.
+    Returns formation and/or retouch events that just fired. Anything whose
+    entry-to-stop distance is under this timeframe's floor is dropped -- at a
+    ~0.25% round-trip cost, a stop that tight spends most of its R getting in
+    and out.
     """
     if len(df) < cfg.OB_MIN_BARS:
         return []
@@ -221,4 +221,5 @@ def latest_events(df: pd.DataFrame, ticker: str, tf: str) -> list[dict]:
             events.append(_event(df, ticker, tf, z, "formation"))
         if cfg.OB_ALERT_RETOUCH and z["retouch_i"] == last:
             events.append(_event(df, ticker, tf, z, "retouch"))
-    return [e for e in events if e["risk_pct"] >= cfg.OB_MIN_RISK_PCT]
+    floor = cfg.OB_MIN_RISK_PCT_BY_TF.get(tf, 0.5)
+    return [e for e in events if e["risk_pct"] >= floor]

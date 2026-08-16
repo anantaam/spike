@@ -108,7 +108,28 @@ OB_ALERT_RETOUCH = _env("SPIKE_OB_ALERT_RETOUCH", "1") not in ("0", "false", "Fa
 # 838k historical blocks, outcomes improve monotonically with zone thickness.
 # This is also the main volume control: unfiltered, OB retouches fire ~1000x a
 # day across 500 names, which is unreadable.
-OB_MIN_RISK_PCT = float(_env("SPIKE_OB_MIN_RISK_PCT", "1.5"))
+def _per_tf(raw: str, default: float) -> dict:
+    """Accepts either one number for every timeframe, or 'tf=value' pairs."""
+    if "=" not in raw:
+        return {tf: float(raw or default) for tf in ("5min", "15min", "1h", "1D")}
+    out = {}
+    for part in raw.split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = float(v)
+    return out
+
+
+# Minimum entry-to-stop distance, as % of entry, for an OB alert to be sent.
+# Per timeframe, because the stop is k*ATR and ATR scales with timeframe -- a
+# flat gate silently switches the fast timeframes off rather than filtering
+# them (at a flat 1.5% the 5min and 15min streams drop to ~0.1 and ~0.6 alerts
+# a day, while 1D is untouched).
+# Floor rationale: round-trip cost is ~0.25%, so a 0.5% stop already spends
+# half an R on costs; below that the trade isn't worth taking regardless of
+# the setup. Roughly 38 alerts/day across the F&O universe at these values.
+OB_MIN_RISK_PCT_BY_TF = _per_tf(
+    _env("SPIKE_OB_MIN_RISK_PCT", "5min=1.0,15min=1.0,1h=0.5,1D=0.5"), 0.5)
 
 # How far into the block price must trade before it counts as a retest.
 # 1.0 = the distal edge (must cross the whole block -- the level LuxAlgo
