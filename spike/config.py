@@ -47,6 +47,14 @@ UNIVERSE_OVERRIDE = [t.strip().upper() for t in _env("SPIKE_UNIVERSE").split(","
 # and small enough to keep alert volume readable.
 UNIVERSE_SOURCE = _env("SPIKE_UNIVERSE_SOURCE", "fno").strip().lower()
 
+# Spot indices, appended to the universe. These are Kite NSE tradingsymbols
+# (segment INDICES) and resolve through the normal token lookup. Kite reports
+# volume=0 on every index bar, so the thrust-retest detector correctly finds
+# nothing on them -- but order blocks are purely structural and work fine.
+INDEX_UNIVERSE = [s.strip() for s in _env(
+    "SPIKE_INDICES", "NIFTY 50,NIFTY BANK,NIFTY FIN SERVICE,NIFTY MID SELECT,NIFTY NEXT 50"
+).split(",") if s.strip()]
+
 # MCX commodity underlyings to scan (majors only -- mini/micro/guinea/petal
 # variants of the same commodity are deliberately excluded, they just
 # duplicate the same price action at a smaller lot size). Intraday only
@@ -101,6 +109,18 @@ OB_ALERT_RETOUCH = _env("SPIKE_OB_ALERT_RETOUCH", "1") not in ("0", "false", "Fa
 # This is also the main volume control: unfiltered, OB retouches fire ~1000x a
 # day across 500 names, which is unreadable.
 OB_MIN_RISK_PCT = float(_env("SPIKE_OB_MIN_RISK_PCT", "1.5"))
+
+# How far into the block price must trade before it counts as a retest.
+# 1.0 = the distal edge (must cross the whole block -- the level LuxAlgo
+# actually draws on the chart), 0.5 = the ICT mean threshold, 0.0 = any graze
+# of the near edge. At 0.0 roughly a quarter of "retests" penetrated under 25%
+# of the zone and ~8% under 5%, which is not a retest in any useful sense.
+OB_RETOUCH_DEPTH = float(_env("SPIKE_OB_RETOUCH_DEPTH", "1.0"))
+
+# Stop distance in ATRs (measured at the entry bar) beyond the entry level.
+# Stops drawn from the OB candle's own geometry are unusable -- see the note
+# in ob_detector.entry_stop.
+OB_STOP_ATR_MULT = float(_env("SPIKE_OB_STOP_ATR_MULT", "1.0"))
 OB_MIN_BARS = int(_env("SPIKE_OB_MIN_BARS", "120"))
 
 # Kite historical_data rate limit: keep comfortably under Kite's ~3 req/sec cap

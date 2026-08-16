@@ -61,8 +61,15 @@ def _find_bull(df, swing_len, use_body):
         # --- age every live block against this bar, before creating today's ---
         still_live = []
         for z in live:
-            if z["retouch_i"] is None and l[i] <= z["zone_hi"]:
-                z["retouch_i"] = i                  # ENTRY event
+            # apex = furthest the move ran before coming back. Frozen at the
+            # retouch: afterwards the block is in the trade, not the run-up.
+            if z["retouch_i"] is None:
+                z["apex"] = max(z["apex"], h[i])
+                if l[i] <= z["trigger"]:
+                    z["retouch_i"] = i              # ENTRY event
+                    # ATR as of the entry bar -- the stop is sized off current
+                    # volatility, not off the OB candle's own geometry.
+                    z["atr_at_entry"] = float(atr[i]) if not np.isnan(atr[i]) else np.nan
             if z["breaker_i"] is None:
                 if body_bot[i] < z["zone_lo"]:
                     z["breaker_i"] = i              # zone failed
@@ -77,11 +84,17 @@ def _find_bull(df, swing_len, use_body):
         if crossed or swing_x < 0 or c[i] <= swing_y:
             continue
         crossed = True                 # one-shot: this swing can't fire again
-        # avgvol can be a legitimate 0 (illiquid name, or a session with no
-        # trades in the whole 20-bar window) -- isnan alone doesn't catch that,
-        # and dividing by it yields inf/nan plus a RuntimeWarning per bar.
-        if np.isnan(atr[i]) or np.isnan(avgvol[i]) or avgvol[i] <= 0:
+        if np.isnan(atr[i]):
             continue
+        # Volume is optional here: an order block is purely structural (swing
+        # break + extreme candle in the leg), so it works fine without it.
+        # Spot indices report volume=0 for every bar, and illiquid names can
+        # have a genuinely empty 20-bar window -- in both cases avgvol is 0 or
+        # NaN, which is not a reason to skip the block, only a reason to have
+        # no vol_spike to report. (The thrust-retest detector is different --
+        # volume spike and decline are core conditions there, so it correctly
+        # finds nothing on indices.)
+        has_vol = not np.isnan(avgvol[i]) and avgvol[i] > 0
 
         lo_j, hi_j = swing_x + 1, i - 1
         if hi_j < lo_j:
@@ -91,10 +104,23 @@ def _find_bull(df, swing_len, use_body):
         if z_hi <= z_lo:
             continue
 
+        # How far into the zone price must come before it counts as a retest.
+        # 0.0 = the proximal edge (any graze of the top), 1.0 = the distal edge
+        # (price must cross the whole block -- the line LuxAlgo actually draws).
+        # The proximal edge fires on the shallowest wobble: on a 2.7%-tall zone
+        # a bar dipping 0.5 points in was being recorded as a full retest.
+        trigger = z_hi - cfg.OB_RETOUCH_DEPTH * (z_hi - z_lo)
+
         live.append(dict(
             swing_i=swing_x, form_i=i, ob_i=j, zone_lo=float(z_lo), zone_hi=float(z_hi),
-            vol_spike=float(v[i] / avgvol[i]), leg_bars=i - swing_x,
-            retouch_i=None, breaker_i=None, invalid_i=None,
+            trigger=float(trigger),
+            # stop sits beyond the OB candle's WICK, not its body -- with the
+            # entry now at the distal edge, a stop at the body bottom would be
+            # taken out by the very bar that triggers the entry.
+            ob_low=float(l[j]), ob_high=float(h[j]),
+            vol_spike=float(v[i] / avgvol[i]) if has_vol else None,
+            leg_bars=i - swing_x, apex=float(h[i]),
+            retouch_i=None, breaker_i=None, invalid_i=None, atr_at_entry=np.nan,
         ))
 
     done.extend(live)
@@ -118,17 +144,51 @@ def find_blocks(df: pd.DataFrame, swing_len: int | None = None,
         out.append(z)
     for z in _find_bull(_mirror(df), swing_len, use_body):
         z["zone_lo"], z["zone_hi"] = -z["zone_hi"], -z["zone_lo"]
+        z["ob_low"], z["ob_high"] = -z["ob_high"], -z["ob_low"]
+        z["apex"] = -z["apex"]          # a mirrored high is a real low
+        z["trigger"] = -z["trigger"]
         z["direction"] = "bearish"
         out.append(z)
     return out
 
 
+def entry_stop(z: dict, atr_mult: float | None = None) -> tuple[float, float]:
+    """Entry is wherever the retest triggers. The stop is ATR-based, placed a
+    multiple of current volatility beyond it.
+
+    Anything derived from the OB candle itself -- the zone floor, or the wick
+    past it -- turned out to be far too tight to trade: median stops of
+    0.10-0.57%, against ~0.25% round-trip costs, and on 5min the wick version
+    collapsed to zero risk 63% of the time because the chosen candle usually
+    opens or closes right at its extreme. Volatility doesn't have that
+    problem, and it can't be degenerate.
+
+    Falls back to the wick if ATR is unavailable (too few bars of history).
+    """
+    mult = cfg.OB_STOP_ATR_MULT if atr_mult is None else atr_mult
+    entry = z["trigger"]
+    atr = z.get("atr_at_entry", np.nan)
+    bull = z["direction"] == "bullish"
+    if atr is None or np.isnan(atr) or atr <= 0:
+        return entry, (z["ob_low"] if bull else z["ob_high"])
+    return entry, (entry - mult * atr) if bull else (entry + mult * atr)
+
+
+def move_pct(z: dict) -> float:
+    """How far the breakout ran past the block before coming back, as a % of
+    the entry price -- i.e. the size of the extension leg. This is the 'how
+    much room was there' measure, distinct from zone thickness."""
+    if z["direction"] == "bullish":
+        entry, run = z["zone_hi"], z["apex"] - z["zone_hi"]
+    else:
+        entry, run = z["zone_lo"], z["zone_lo"] - z["apex"]
+    return run / entry * 100 if entry else float("nan")
+
+
 def _event(df, ticker, tf, z, kind):
     idx = df.index
     zone_lo, zone_hi = z["zone_lo"], z["zone_hi"]
-    bull = z["direction"] == "bullish"
-    # entry at the zone edge price first meets, stop beyond the far edge
-    entry, stop = (zone_hi, zone_lo) if bull else (zone_lo, zone_hi)
+    entry, stop = entry_stop(z)
     risk_pct = abs(entry - stop) / entry * 100 if entry else float("nan")
     return dict(
         pattern="OB", event=kind, ticker=ticker, tf=tf, direction=z["direction"],
@@ -137,7 +197,9 @@ def _event(df, ticker, tf, z, kind):
         retouch_ts=str(idx[z["retouch_i"]]) if z["retouch_i"] is not None else None,
         zone_lo=round(zone_lo, 2), zone_hi=round(zone_hi, 2),
         entry=round(entry, 2), stop=round(stop, 2),
-        risk_pct=round(risk_pct, 2), vol_spike=round(z["vol_spike"], 2),
+        risk_pct=round(risk_pct, 2),
+        apex=round(z["apex"], 2), move_pct=round(move_pct(z), 2),
+        vol_spike=round(z["vol_spike"], 2) if z.get("vol_spike") is not None else None,
         leg_bars=int(z["leg_bars"]),
     )
 

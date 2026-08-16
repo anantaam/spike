@@ -61,6 +61,10 @@ def discover_universe(kite) -> list[str]:
 
     names = _fno_underlyings(kite)
     logger.info("Universe: %d F&O underlyings from kite.instruments()", len(names))
+    if config.INDEX_UNIVERSE:
+        names = names + [s for s in config.INDEX_UNIVERSE if s not in names]
+        logger.info("Universe: + %d spot indices (%s)",
+                    len(config.INDEX_UNIVERSE), ", ".join(config.INDEX_UNIVERSE))
     return names
 
 
