@@ -120,6 +120,10 @@ def _find_bull(df, swing_len, use_body):
             ob_low=float(l[j]), ob_high=float(h[j]),
             vol_spike=float(v[i] / avgvol[i]) if has_vol else None,
             leg_bars=i - swing_x, apex=float(h[i]),
+            # ATR at the break, so a FORMATION alert can quote a sensible stop
+            # before any retouch exists. Superseded by atr_at_entry once price
+            # actually comes back.
+            atr_at_form=float(atr[i]),
             retouch_i=None, breaker_i=None, invalid_i=None, atr_at_entry=np.nan,
         ))
 
@@ -167,7 +171,13 @@ def entry_stop(z: dict, atr_mult: float | None = None) -> tuple[float, float]:
     """
     mult = cfg.OB_STOP_ATR_MULT if atr_mult is None else atr_mult
     entry = z["trigger"]
+    # Prefer ATR at the retouch; before that exists (a FORMATION alert) fall
+    # back to ATR at the break. Without this the formation path dropped to the
+    # wick stop, which is degenerate on most blocks -- 96% of them failed the
+    # risk gate, so formation alerts never fired at all.
     atr = z.get("atr_at_entry", np.nan)
+    if atr is None or np.isnan(atr):
+        atr = z.get("atr_at_form", np.nan)
     bull = z["direction"] == "bullish"
     if atr is None or np.isnan(atr) or atr <= 0:
         return entry, (z["ob_low"] if bull else z["ob_high"])
