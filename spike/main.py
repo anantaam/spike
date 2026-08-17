@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from . import config, data_feed, detector, kite_session, notifier, ob_detector
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -74,6 +76,22 @@ def _daily_bar_ready(now_ist: datetime) -> bool:
     close_dt = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
     window_end = now_ist.replace(hour=EOD_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
     return close_dt + timedelta(minutes=EOD_GRACE_MINUTES) <= now_ist <= window_end
+
+
+def _completed(tdf, close_time: datetime):
+    """Drop the bar that is still forming.
+
+    resample() labels a bar with the START of its period, so at 13:33 a 15min
+    frame ends with a bar labelled 13:30 holding three minutes of data. Both
+    detectors trigger on the last bar, so without this they fire on a partial
+    candle and the signal can evaporate as the bar fills in. close_time is the
+    close of the most recently completed candle, so anything labelled at or
+    after it is still open.
+    """
+    if tdf.empty:
+        return tdf
+    cutoff = pd.Timestamp(close_time).tz_localize(None)
+    return tdf[tdf.index < cutoff]
 
 
 def _check_and_alert(ticker: str, tf: str, tdf, seen: set,
@@ -224,12 +242,12 @@ def run():
                 new_alerts = ob_alerts = 0
                 if equity_open:
                     for ticker, df1 in history.items():
-                        tdf = data_feed.resample(df1, tf)
+                        tdf = _completed(data_feed.resample(df1, tf), close_time)
                         new_alerts += _check_and_alert(ticker, tf, tdf, seen)
                         ob_alerts += _check_ob(ticker, tf, tdf, seen)
                 if mcx_open:
                     for ticker, df1 in commodity_history.items():
-                        tdf = data_feed.resample(df1, tf)
+                        tdf = _completed(data_feed.resample(df1, tf), close_time)
                         new_alerts += _check_and_alert(ticker, tf, tdf, seen, session_open_hm=config.MCX_OPEN_HM)
                         ob_alerts += _check_ob(ticker, tf, tdf, seen)
                 last_run[tf] = close_time
