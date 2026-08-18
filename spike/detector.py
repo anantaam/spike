@@ -15,6 +15,8 @@ import pandas as pd
 
 from . import config as cfg
 
+LEVEL_SCAN_CAP = 500   # bars; upper bound on the "how long had this level stood" walk
+
 
 def _indicators(df):
     df = df.copy()
@@ -118,6 +120,16 @@ def _find_setups_one_side(df, ticker, tf):
         if c[e] <= recent_high:
             continue
 
+        # How long the level just cleared had stood. The detector only
+        # requires beating the LEVEL_LOOKBACK (60-bar) extreme, but clearing a
+        # 60-bar high and clearing a 400-bar high are very different events,
+        # and the alert should say which. Capped so a quiet name can't turn
+        # this into a full-history walk.
+        k, floor = s - 1, max(0, s - 1 - LEVEL_SCAN_CAP)
+        while k >= floor and h[k] < c[e]:
+            k -= 1
+        break_lookback = s - 1 - k
+
         j_end = min(e + cfg.MAX_WAIT, n - 1)
         extended, reversion_j = False, None
         for j in range(e + 1, j_end + 1):
@@ -142,6 +154,7 @@ def _find_setups_one_side(df, ticker, tf):
             run_len=e - s + 1, breakout_ts=idx[e], reversion_ts=idx[reversion_j],
             bars_to_revert=reversion_j - e, zone_lo=float(zone_lo), zone_hi=float(zone_hi),
             base_bars=b1 - b0, move_atr=total_move / atr[s], vol_spike=v[s:e + 1].mean() / avgvol[s],
+            break_lookback=break_lookback,
             baseline_relative=baseline_relative, vol_slope=slope, far_violation=far_violation,
         ))
     return pd.DataFrame(out)
@@ -223,6 +236,7 @@ def latest_signal(df: pd.DataFrame, ticker: str, tf: str,
         zone_lo=round(float(row.zone_lo), 2), zone_hi=round(float(row.zone_hi), 2),
         entry=round(float(entry), 2), stop=round(float(stop), 2), target=round(float(target), 2),
         extension_size=round(float(extension), 2), vol_spike=round(float(row.vol_spike), 2),
+        break_lookback=int(row.break_lookback),
         thrust_to_zone_ratio=round(float(thrust_to_zone_ratio), 2),
         high_probability=high_probability,
     )

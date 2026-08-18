@@ -23,6 +23,8 @@ import pandas as pd
 
 from . import config as cfg
 
+LEVEL_SCAN_CAP = 500   # bars; upper bound on the "how long had this level stood" walk
+
 
 def _atr_avgvol(df):
     prev_close = df.close.shift(1)
@@ -111,8 +113,19 @@ def _find_bull(df, swing_len, use_body):
         # a bar dipping 0.5 points in was being recorded as a full retest.
         trigger = z_hi - cfg.OB_RETOUCH_DEPTH * (z_hi - z_lo)
 
+        # How long the swing just broken had stood unchallenged. The swing test
+        # itself only looks back swing_len (10) bars, so clearing it can mean a
+        # minor local high or a genuinely long-standing one -- very different
+        # events, and the alert should distinguish them. Capped to keep this
+        # from becoming a full-history walk on a quiet name.
+        k, floor = swing_x - 1, max(0, swing_x - 1 - LEVEL_SCAN_CAP)
+        while k >= floor and h[k] < swing_y:
+            k -= 1
+        break_lookback = swing_x - 1 - k
+
         live.append(dict(
             swing_i=swing_x, form_i=i, ob_i=j, zone_lo=float(z_lo), zone_hi=float(z_hi),
+            break_lookback=int(break_lookback),
             trigger=float(trigger),
             # stop sits beyond the OB candle's WICK, not its body -- with the
             # entry now at the distal edge, a stop at the body bottom would be
@@ -209,6 +222,7 @@ def _event(df, ticker, tf, z, kind):
         entry=round(entry, 2), stop=round(stop, 2),
         risk_pct=round(risk_pct, 2),
         apex=round(z["apex"], 2), move_pct=round(move_pct(z), 2),
+        break_lookback=int(z.get("break_lookback", 0)),
         vol_spike=round(z["vol_spike"], 2) if z.get("vol_spike") is not None else None,
         leg_bars=int(z["leg_bars"]),
     )

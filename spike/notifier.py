@@ -8,6 +8,18 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
+def _level_note(bars: int) -> str:
+    """How significant the level just cleared was. Both detectors only require
+    beating a short local extreme -- a 10-bar swing for order blocks, 60 bars
+    for the thrust detector -- so the bar count is what separates "cleared a
+    minor swing" from "cleared a level that had stood for months"."""
+    if bars <= 0:
+        return "no prior level cleared"
+    if bars >= 500:
+        return "broke a 500+ bar high/low"
+    return f"broke a {bars}-bar high/low"
+
+
 def _post(msg: str) -> None:
     webhook = config.DISCORD_WEBHOOK_URL
     if not webhook:
@@ -33,11 +45,13 @@ def send_ob_alert(ev: dict) -> None:
     else:
         head = f"🎯 **{ev['ticker']}** [{ev['tf']}] {arrow} OB RETOUCH — entry trigger"
         when = f"formed {ev['formation_ts']}, retouched {ev['retouch_ts']}"
+    vol = f", vol_spike {ev['vol_spike']}x" if ev.get("vol_spike") is not None else ""
     _post(
         f"{head}\n"
         f"zone: {ev['zone_lo']}-{ev['zone_hi']}  entry: {ev['entry']}  stop: {ev['stop']}  "
         f"risk: {ev['risk_pct']}%\n"
-        f"{when}, vol_spike {ev['vol_spike']}x"
+        f"{_level_note(ev.get('break_lookback', 0))}, move {ev['move_pct']}%\n"
+        f"{when}{vol}"
     )
 
 
@@ -57,6 +71,7 @@ def send_alert(signal: dict) -> None:
         f"{arrow} **{signal['ticker']}** [{signal['tf']}] {signal['direction'].upper()} retest{tags}\n"
         f"zone: {signal['zone_lo']}-{signal['zone_hi']}  entry: {signal['entry']}  "
         f"stop: {signal['stop']}  target: {signal['target']}\n"
+        f"{_level_note(signal.get('break_lookback', 0))}\n"
         f"thrust {signal['thrust_start']} -> {signal['thrust_end']}, "
         f"retest {signal['retest_ts']}, vol_spike {signal['vol_spike']}x, "
         f"thrust/zone {signal['thrust_to_zone_ratio']}x"
