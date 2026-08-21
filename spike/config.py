@@ -144,6 +144,24 @@ OB_RETOUCH_DEPTH = float(_env("SPIKE_OB_RETOUCH_DEPTH", "1.0"))
 OB_STOP_ATR_MULT = float(_env("SPIKE_OB_STOP_ATR_MULT", "1.0"))
 OB_MIN_BARS = int(_env("SPIKE_OB_MIN_BARS", "120"))
 
+# --- crypto scanner (binance_feed.py + crypto_main.py) ---------------------
+# Public Binance data only -- no API key is used or needed, so there is no
+# credential here to leak and no daily token to expire.
+# Fixed list of the durable retail majors. Ranked by TRADE COUNT rather than
+# dollar volume: volume alone puts stablecoin pairs (USD1, RLUSD) near the top,
+# and those barely move, so a breakout detector on them is meaningless.
+CRYPTO_ENABLED = _env("SPIKE_CRYPTO_ENABLED", "1") not in ("0", "false", "False")
+CRYPTO_UNIVERSE = [s.strip().upper() for s in _env(
+    "SPIKE_CRYPTO_UNIVERSE",
+    "BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT,BNBUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,SUIUSDT,PEPEUSDT"
+).split(",") if s.strip()]
+CRYPTO_TIMEFRAMES = [t.strip() for t in _env(
+    "SPIKE_CRYPTO_TIMEFRAMES", "5min,15min,1h,1D").split(",") if t.strip()]
+CRYPTO_DISCORD_WEBHOOK_URL = _env("SPIKE_CRYPTO_DISCORD_WEBHOOK_URL")
+# Gates are calibrated separately from equities: crypto ATR as a % of price is
+# far larger, so the F&O values would let essentially everything through.
+CRYPTO_MIN_RISK_PCT_BY_TF = _per_tf(_env("SPIKE_CRYPTO_MIN_RISK_PCT", "0.5"), 0.5)
+
 # Kite historical_data rate limit: keep comfortably under Kite's ~3 req/sec cap
 HISTORICAL_REQUEST_DELAY_SECONDS = float(_env("SPIKE_HIST_DELAY", "0.35"))
 
