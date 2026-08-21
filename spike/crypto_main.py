@@ -64,7 +64,11 @@ def _boundary(now: datetime, tf: str) -> datetime:
 
 
 def _check(symbol: str, tf: str, df, seen: set) -> tuple[int, int]:
-    hook = config.CRYPTO_DISCORD_WEBHOOK_URL or None
+    # Crypto posts to its own channel or nowhere. Deliberately NO fallback to
+    # the equity webhook: silently mixing 24/7 crypto alerts into the F&O
+    # channel is worse than not sending them, because it corrupts a feed the
+    # user is reading for a different purpose.
+    hook = config.CRYPTO_DISCORD_WEBHOOK_URL
     spike_n = ob_n = 0
 
     try:
@@ -77,8 +81,11 @@ def _check(symbol: str, tf: str, df, seen: set) -> tuple[int, int]:
         if key not in seen:
             seen.add(key)
             logger.info("SIGNAL %s", sig)
-            notifier.send_alert(sig, hook)
-            spike_n = 1
+            if hook:
+                notifier.send_alert(sig, hook)
+                spike_n = 1
+            else:
+                logger.warning("no crypto webhook -- logged only, NOT sent: %s/%s", symbol, tf)
 
     if config.OB_ENABLED and tf in config.CRYPTO_TIMEFRAMES:
         try:
@@ -95,8 +102,12 @@ def _check(symbol: str, tf: str, df, seen: set) -> tuple[int, int]:
                 continue
             seen.add(key)
             logger.info("OB %s", ev)
-            notifier.send_ob_alert(ev, hook)
-            ob_n += 1
+            if hook:
+                notifier.send_ob_alert(ev, hook)
+                ob_n += 1
+            else:
+                logger.warning("no crypto webhook -- logged only, NOT sent: %s/%s %s",
+                               symbol, tf, ev["event"])
     return spike_n, ob_n
 
 
@@ -107,8 +118,8 @@ def run():
     logger.info("universe: %d pairs %s, timeframes: %s", len(universe), universe, tfs)
     logger.info("gates: %s", config.CRYPTO_MIN_RISK_PCT_BY_TF)
     if not config.CRYPTO_DISCORD_WEBHOOK_URL:
-        logger.warning("SPIKE_CRYPTO_DISCORD_WEBHOOK_URL not set -- "
-                       "alerts will fall back to the equity webhook")
+        logger.warning("SPIKE_CRYPTO_DISCORD_WEBHOOK_URL not set -- crypto alerts "
+                       "will be LOGGED ONLY, never posted to the equity channel")
 
     seen = _load_seen()
     last_run = {tf: None for tf in tfs}
