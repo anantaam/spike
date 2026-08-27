@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart trading services each weekday before the market session
+
+[Timer]
+# 08:30 IST: ahead of the MCX open (09:00) and the NSE equity open (09:15),
+# with enough margin for spike to re-login and preload ~220 tickers (~60s).
+OnCalendar=Mon..Fri 08:30 Asia/Kolkata
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

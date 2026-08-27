@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Bootstrap spike on a fresh box: venv, deps, .env, systemd unit.
+# Bootstrap spike on a fresh box: venv, deps, .env, systemd units, shared ops.
 # Idempotent -- safe to re-run after a git pull.
+#
+# Everything needed to rebuild from scratch is in this repo EXCEPT .env, which
+# holds credentials and is deliberately untracked. Restore that from your own
+# backup, or fill it in from .env.example.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -12,21 +16,32 @@ fi
 
 if [ ! -f .env ]; then
     cp .env.example .env
-    echo ">>> Created .env from .env.example -- edit it before starting the service."
+    echo ">>> Created .env from .env.example -- fill it in before starting anything."
 fi
+chmod 600 .env
 
 mkdir -p state data_cache logs
 
-UNIT_SRC="systemd/spike.service"
-UNIT_DST="/etc/systemd/system/spike.service"
 if [ -w /etc/systemd/system ] || sudo -n true 2>/dev/null; then
-    sudo cp "$UNIT_SRC" "$UNIT_DST"
+    sudo cp systemd/spike.service systemd/crypto.service /etc/systemd/system/
+
+    # Shared pre-market restart: any algo on this box whose broker session
+    # expires daily can register in services.conf. Lives outside the repo tree
+    # on purpose so other projects can use it.
+    sudo mkdir -p /opt/market-ops
+    sudo cp ops/premarket-restart.sh /opt/market-ops/
+    sudo cp -n ops/services.conf /opt/market-ops/ 2>/dev/null || true   # never clobber a live list
+    sudo chmod 755 /opt/market-ops/premarket-restart.sh
+    sudo cp systemd/premarket-restart.service systemd/premarket-restart.timer /etc/systemd/system/
+
     sudo systemctl daemon-reload
-    echo ">>> Installed $UNIT_DST. Enable/start with:"
-    echo "      sudo systemctl enable --now spike.service"
+    echo ">>> Units installed. Enable with:"
+    echo "      sudo systemctl enable --now spike.service crypto.service premarket-restart.timer"
 else
-    echo ">>> No sudo access -- copy $UNIT_SRC to /etc/systemd/system/spike.service yourself,"
-    echo "    then: sudo systemctl daemon-reload && sudo systemctl enable --now spike.service"
+    echo ">>> No sudo -- copy systemd/*.service and systemd/*.timer to /etc/systemd/system/,"
+    echo "    and ops/* to /opt/market-ops/, then daemon-reload and enable."
 fi
 
-echo ">>> Done. Edit .env, then start the service (see above)."
+echo ">>> Done. Fill in .env, then enable the services above."
+echo ">>> The equity scanner needs a Kite Connect app WITH historical data API."
+echo ">>> The crypto scanner needs no credentials at all (Binance public API)."

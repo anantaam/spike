@@ -1,0 +1,12 @@
+[Unit]
+Description=Pre-market restart of trading services (fresh broker session)
+Documentation=file:/opt/market-ops/services.conf
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/market-ops/premarket-restart.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=premarket-restart
