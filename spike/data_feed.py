@@ -263,7 +263,18 @@ def refresh_daily(kite, ticker: str, existing: pd.DataFrame, lookback_days: int 
     return merged
 
 
-def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    o = df.resample(rule, label="left", closed="left").agg(
+def resample(df: pd.DataFrame, rule: str, offset_min: int = 0) -> pd.DataFrame:
+    """Resample 1-min bars to `rule`, anchored to the session open.
+
+    offset_min matters only where the session does not start on a boundary of
+    the rule. NSE equity opens at 09:15, so hourly bars run 09:15-10:15,
+    10:15-11:15 and so on -- a plain resample("1h") anchors to clock hours
+    instead and produces candles straddling two real ones, a 45-minute first
+    bar, and swing/OB structure that disagrees with any chart. 09:15 divides
+    evenly into 5 and 15, so those timeframes need no offset; MCX opens at
+    09:00 and is already aligned.
+    """
+    o = df.resample(rule, label="left", closed="left",
+                    offset=f"{offset_min}min" if offset_min else None).agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
     return o.dropna(subset=["open"])

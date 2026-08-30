@@ -62,10 +62,47 @@ def _is_mcx_open(now_ist: datetime) -> bool:
     return (t.hour, t.minute) >= config.MCX_OPEN_HM and (t.hour, t.minute) <= _mcx_close_hm(now_ist)
 
 
-def _boundary(now_ist: datetime, tf_minutes: int) -> datetime:
-    total = now_ist.hour * 60 + now_ist.minute
-    floored = (total // tf_minutes) * tf_minutes
-    return now_ist.replace(hour=floored // 60, minute=floored % 60, second=0, microsecond=0)
+# Minutes past the hour that each segment's session starts on. Only matters
+# for the 1h timeframe: NSE opens 09:15 so its hourly candles run 09:15-10:15,
+# while MCX opens 09:00 and is already on the clock grid. 5min/15min divide
+# evenly into 09:15 either way.
+EQUITY_HOUR_OFFSET = 15
+MCX_HOUR_OFFSET = 0
+
+
+def _tf_offset(tf: str, hour_offset: int) -> int:
+    return hour_offset if tf == "1h" else 0
+
+
+def _boundary(now_ist: datetime, tf_minutes: int, offset_min: int = 0) -> datetime:
+    """Close of the most recently completed candle on this timeframe's grid.
+
+    offset_min shifts the grid off the clock so it lines up with the session
+    open -- without it, 1h boundaries land on the hour while NSE's candles
+    close at quarter past, and the scanner evaluates a candle that is still
+    45 minutes from closing.
+    """
+    total = now_ist.hour * 60 + now_ist.minute - offset_min
+    floored = (total // tf_minutes) * tf_minutes + offset_min
+    day_shift, mins = divmod(floored, 24 * 60)
+    base = now_ist.replace(hour=mins // 60, minute=mins % 60, second=0, microsecond=0)
+    return base + timedelta(days=day_shift)
+
+
+def _due(now_ist: datetime, tfs: list[str], last_run: dict,
+         hour_offset: int, segment: str) -> list[tuple[str, datetime]]:
+    """Timeframes whose candle has closed and hasn't been scanned yet.
+
+    Computed per segment because equity and MCX sit on different 1h grids, so
+    one shared due-list would scan one of them against a half-formed candle.
+    """
+    out = []
+    for tf in tfs:
+        close_time = _boundary(now_ist, INTRADAY_TF_MINUTES[tf], _tf_offset(tf, hour_offset))
+        if now_ist >= close_time + timedelta(seconds=GRACE_SECONDS) \
+                and last_run.get((segment, tf)) != close_time:
+            out.append((tf, close_time))
+    return out
 
 
 def _daily_bar_ready(now_ist: datetime) -> bool:
@@ -169,7 +206,7 @@ def run():
 
     last_commodity_discovery = datetime.now(IST).date()
     seen = _load_seen()
-    last_run = {tf: None for tf in config.TIMEFRAMES}
+    last_run: dict = {}   # (segment, tf) -> close_time of the last scan
     last_heartbeat = None
 
     while True:
@@ -208,50 +245,48 @@ def run():
                         equity_open, mcx_open, len(history), len(commodity_history))
             last_heartbeat = now_ist
 
-        due_intraday = []
-        if intraday_tfs and (equity_open or mcx_open):
-            for tf in intraday_tfs:
-                # _boundary floors `now` to the tf grid -- that floor value IS
-                # the close time of the most recently completed candle. (A
-                # previous version added tf_minutes here, which instead gives
-                # the close of the candle still in progress -- a time that's
-                # always in the future, so `ready` could never fire.)
-                close_time = _boundary(now_ist, INTRADAY_TF_MINUTES[tf])
-                ready = now_ist >= close_time + timedelta(seconds=GRACE_SECONDS)
-                if ready and last_run.get(tf) != close_time:
-                    due_intraday.append((tf, close_time))
+        due_eq = _due(now_ist, intraday_tfs, last_run, EQUITY_HOUR_OFFSET, "eq") \
+            if (intraday_tfs and equity_open) else []
+        due_mcx = _due(now_ist, intraday_tfs, last_run, MCX_HOUR_OFFSET, "mcx") \
+            if (intraday_tfs and mcx_open) else []
 
         daily_due = (want_daily and _daily_bar_ready(now_ist)
-                     and last_run.get("1D") != now_ist.date().isoformat())
+                     and last_run.get(("eq", "1D")) != now_ist.date().isoformat())
 
-        if due_intraday:
-            if equity_open:
-                for ticker in list(history.keys()):
-                    try:
-                        history[ticker] = data_feed.refresh_latest(kite, ticker, history[ticker])
-                    except Exception as exc:
-                        logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
-            if mcx_open:
-                for ticker in list(commodity_history.keys()):
-                    try:
-                        commodity_history[ticker] = data_feed.refresh_latest(kite, ticker, commodity_history[ticker])
-                    except Exception as exc:
-                        logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
-
-            for tf, close_time in due_intraday:
+        if due_eq:
+            for ticker in list(history.keys()):
+                try:
+                    history[ticker] = data_feed.refresh_latest(kite, ticker, history[ticker])
+                except Exception as exc:
+                    logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
+            for tf, close_time in due_eq:
+                off = _tf_offset(tf, EQUITY_HOUR_OFFSET)
                 new_alerts = ob_alerts = 0
-                if equity_open:
-                    for ticker, df1 in history.items():
-                        tdf = _completed(data_feed.resample(df1, tf), close_time)
-                        new_alerts += _check_and_alert(ticker, tf, tdf, seen)
-                        ob_alerts += _check_ob(ticker, tf, tdf, seen)
-                if mcx_open:
-                    for ticker, df1 in commodity_history.items():
-                        tdf = _completed(data_feed.resample(df1, tf), close_time)
-                        new_alerts += _check_and_alert(ticker, tf, tdf, seen, session_open_hm=config.MCX_OPEN_HM)
-                        ob_alerts += _check_ob(ticker, tf, tdf, seen)
-                last_run[tf] = close_time
-                logger.info("scanned tf=%s at %s, %d new alert(s), %d OB alert(s)",
+                for ticker, df1 in history.items():
+                    tdf = _completed(data_feed.resample(df1, tf, off), close_time)
+                    new_alerts += _check_and_alert(ticker, tf, tdf, seen)
+                    ob_alerts += _check_ob(ticker, tf, tdf, seen)
+                last_run[("eq", tf)] = close_time
+                logger.info("scanned equity tf=%s at %s, %d new alert(s), %d OB alert(s)",
+                            tf, close_time, new_alerts, ob_alerts)
+            _save_seen(seen)
+
+        if due_mcx:
+            for ticker in list(commodity_history.keys()):
+                try:
+                    commodity_history[ticker] = data_feed.refresh_latest(kite, ticker, commodity_history[ticker])
+                except Exception as exc:
+                    logger.warning("refresh_latest failed for %s (%s)", ticker, exc)
+            for tf, close_time in due_mcx:
+                off = _tf_offset(tf, MCX_HOUR_OFFSET)
+                new_alerts = ob_alerts = 0
+                for ticker, df1 in commodity_history.items():
+                    tdf = _completed(data_feed.resample(df1, tf, off), close_time)
+                    new_alerts += _check_and_alert(ticker, tf, tdf, seen,
+                                                   session_open_hm=config.MCX_OPEN_HM)
+                    ob_alerts += _check_ob(ticker, tf, tdf, seen)
+                last_run[("mcx", tf)] = close_time
+                logger.info("scanned mcx tf=%s at %s, %d new alert(s), %d OB alert(s)",
                             tf, close_time, new_alerts, ob_alerts)
             _save_seen(seen)
 
@@ -267,7 +302,7 @@ def run():
                 new_alerts += _check_and_alert(ticker, "1D", ddf, seen)
                 ob_alerts += _check_ob(ticker, "1D", ddf, seen)
             today_key = now_ist.date().isoformat()
-            last_run["1D"] = today_key
+            last_run[("eq", "1D")] = today_key
             logger.info("scanned tf=1D for %s, %d new alert(s), %d OB alert(s)",
                         today_key, new_alerts, ob_alerts)
             _save_seen(seen)
