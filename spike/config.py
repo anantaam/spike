@@ -11,6 +11,32 @@ def _env(name: str, default: str = "") -> str:
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv() -> None:
+    """Read .env into the environment for processes systemd did not start.
+
+    The services get .env via the unit's EnvironmentFile=, so this is a no-op
+    for them -- existing vars are never overwritten. It exists for CLI runs
+    (replay, smoke tests, one-off scans), which otherwise start with no
+    webhook and no credentials and fail SILENTLY, since a missing webhook is
+    only a warning. That silence cost a round of "it posted" / "I got
+    nothing", so the fix belongs here rather than in each script.
+    """
+    path = Path(os.getenv("SPIKE_ENV_FILE") or (BASE_DIR / ".env"))
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 STATE_DIR = Path(_env("SPIKE_STATE_DIR") or str(BASE_DIR / "state"))
 CACHE_DIR = Path(_env("SPIKE_CACHE_DIR") or str(BASE_DIR / "data_cache"))
 STATE_DIR.mkdir(parents=True, exist_ok=True)

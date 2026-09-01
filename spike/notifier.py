@@ -20,21 +20,30 @@ def _level_note(bars: int) -> str:
     return f"broke a {bars}-bar high/low"
 
 
-def _post(msg: str, webhook: str | None = None, chart: str | None = None) -> None:
+def _post(msg: str, webhook: str | None = None, chart: str | None = None) -> bool:
+    """True only if Discord actually accepted the message.
+
+    Returns a result rather than swallowing everything, so a caller that needs
+    to report "sent" can say so truthfully. The scan loops still ignore it --
+    a failed post must not abort a scan -- but anything that prints a delivery
+    count has no excuse for guessing.
+    """
     webhook = webhook or config.DISCORD_WEBHOOK_URL
     if not webhook:
         logger.warning("SPIKE_DISCORD_WEBHOOK_URL not set -- not sent: %s", msg)
-        return
+        return False
     if chart and _post_with_chart(msg, webhook, chart):
-        return
+        return True
     try:
         req = urllib.request.Request(
             webhook, data=json.dumps({"content": msg[:1900]}).encode(),
             # Discord/Cloudflare 403s the default urllib User-Agent
             headers={"Content-Type": "application/json", "User-Agent": "spike-scanner/1.0"})
         urllib.request.urlopen(req, timeout=10)
+        return True
     except Exception as exc:
         logger.warning("Discord post failed: %s", exc)
+        return False
 
 
 def _post_with_chart(msg: str, webhook: str, chart: str) -> bool:
@@ -86,7 +95,7 @@ def _wave_lines(ev: dict) -> str:
 
 
 def send_ob_alert(ev: dict, webhook: str | None = None,
-                  chart: str | None = None) -> None:
+                  chart: str | None = None) -> bool:
     """Order block formation/retouch. Formation is the cue to check the wave
     count; retouch is the actual entry trigger -- so they're visually distinct."""
     arrow = "▲" if ev["direction"] == "bullish" else "▼"
@@ -98,7 +107,7 @@ def send_ob_alert(ev: dict, webhook: str | None = None,
         head = f"🎯 **{ev['ticker']}** [{ev['tf']}] {arrow} OB RETOUCH — entry trigger{grade}"
         when = f"formed {ev['formation_ts']}, retouched {ev['retouch_ts']}"
     vol = f", vol_spike {ev['vol_spike']}x" if ev.get("vol_spike") is not None else ""
-    _post(
+    return _post(
         f"{head}\n"
         f"{_wave_lines(ev)}"
         f"zone: {ev['zone_lo']}-{ev['zone_hi']}  entry: {ev['entry']}  stop: {ev['stop']}  "
