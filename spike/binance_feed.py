@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 BASE = "https://api.binance.com"
 # Binance interval codes differ from the pandas rules used elsewhere.
-INTERVAL = {"5min": "5m", "15min": "15m", "1h": "1h", "1D": "1d"}
+# 4h/12h are not scan timeframes -- they exist so WAVE_CONTEXT_TF can be
+# pointed at a different wave degree without a code change.
+INTERVAL = {"5min": "5m", "15min": "15m", "1h": "1h",
+            "4h": "4h", "12h": "12h", "1D": "1d"}
 BARS = 1000            # max per call; weight 2, against a 6000/min budget
 TIMEOUT = 20
 

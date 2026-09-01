@@ -7,3 +7,5 @@ __pycache__/
 venv/
 KILL
 nifty500_backfill*
+*.log
+*_intraday.csv

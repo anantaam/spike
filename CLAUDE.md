@@ -182,3 +182,62 @@ numbers, not close-stop, since a real resting stop is stricter):
 No order placement, no automated position sizing, no risk controls in code.
 Deliberate: alert-only lets signal quality get validated against real market
 conditions before trusting any capital to automation.
+
+## Elliott wave context on order-block alerts (2026-09-01)
+
+Every OB alert now carries three extra facts, and a chart. Tagging only — the
+wave count never suppresses an alert, it only annotates one. If no count is
+found the alert fires exactly as before, graded `?`.
+
+**What gets tagged.** Which wave the retouch landed in (1-5), whether the
+block pushes *with* the current leg or *against* it, and where in that leg it
+sat (early / mid-leg / termination; wave 5 is reported as `forming`, because
+it has no known end and guessing one would be fabrication).
+
+**Why only those.** They were the only fields that moved expectancy in the
+local payoff study (`wavelab/payoff.py`, F&O daily, 5.5y): direction agreement
+flips the sign in *every* wave — wave 3 agrees +0.31R vs opposes -0.40R, wave
+4 +0.64 vs -0.26, wave 5 +1.40 (n=15) vs -0.04 at a 3R target. Best bucket is
+agrees + termination (median MFE 2.46R); worst is opposes + termination
+(0.50R). OB alone across 838k setups was -0.01R — i.e. nothing.
+
+**Grades** are a triage label for skimming the feed, not a position size:
+`A` agrees and in wave 4/5, `B` agrees, `C` opposes, `?` no count.
+
+**Opposing setups flip the named side.** If a bullish block is retouched
+inside a *down* leg, the alert names the SHORT-on-break trade, not the long
+bounce — the failed-auction case. Caveat, stated in the alert's own terms and
+worth repeating here: the payoff numbers above are all measured on the
+**bounce**. The break trade has never been measured. Grade C entries are
+geometry, not a validated edge.
+
+**Wave-context timeframe, per segment** (`config.WAVE_CONTEXT_TF`, override
+with `SPIKE_WAVE_CONTEXT_TF="crypto=12h"`):
+
+| segment | tf | why |
+|---|---|---|
+| equity | 1D | matches the prototype the payoff study ran on |
+| crypto | 1D | same calendar degree; Binance serves 999 daily bars, no auth |
+| commodity | 4h | MCX contracts roll monthly — a front-month contract has only ~90-120 daily bars and a third printed **zero volume** before it became liquid, so a 100-140 *daily* count would be fitted to untraded bars. 4h off the 1-min cache gives ~180-280 real bars inside one contract's liquid life. Smaller degree than the equity counts; read accordingly. |
+
+Coverage measured on the live universe the day it shipped: equity 19/40
+names, commodity 4/16 contracts, crypto 3/10 pairs. Crypto on 12h would have
+given 5/10 and 4h 4/10 — deliberately **not** chased. Every timeframe can
+produce a 100-140 bar span by construction, so coverage cannot select the
+timeframe; the degree actually being traded does. Tuning until more counts
+appear is the same overfit as sweeping pivot depth, which produced nothing.
+
+**Cost.** The pivot search is ~1-2s per symbol, so it runs lazily — only for
+symbols that actually raised an OB event — and is memoised on the last
+context-bar timestamp, i.e. once per symbol per day. Charts add matplotlib
+(Agg, headless) and ~0.3s per alert.
+
+**Failure behaviour.** Every layer degrades rather than blocks: no count →
+untagged alert; chart render fails → text-only alert; Discord rejects the
+multipart upload → automatic retry as plain text. An alert is never lost for
+want of a picture.
+
+Files: `spike/wave.py` (ported from `wavelab/fracpivots.py` + `forming.py`),
+`spike/wavechart.py`, `_tag_wave()` in `main.py`/`crypto_main.py`,
+`_wave_lines()` in `notifier.py`. Self-check: `test_wave.py` (needs
+`../wavelab/data`), server smoke test: `smoke_wave.py`.

@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import config, data_feed, detector, kite_session, notifier, ob_detector
+from . import (config, data_feed, detector, kite_session, notifier,
+               ob_detector, wave, wavechart)
 
 IST = ZoneInfo("Asia/Kolkata")
 INTRADAY_TF_MINUTES = {"5min": 5, "15min": 15, "1h": 60}
@@ -152,7 +153,46 @@ def _check_and_alert(ticker: str, tf: str, tdf, seen: set,
     return 1
 
 
-def _check_ob(ticker: str, tf: str, tdf, seen: set) -> int:
+def _mcx_context(df1):
+    """Wave-context bars for a commodity, resampled from its 1-min cache.
+
+    Not daily: MCX contracts roll monthly, so a front-month contract has only
+    ~90-120 daily bars and many printed no volume before it became liquid --
+    a 100-140 daily count would be fitted to untraded bars. See the
+    WAVE_CONTEXT_TF note in config.py.
+    """
+    tf = config.WAVE_CONTEXT_TF.get("commodity", "4h")
+    try:
+        return data_feed.resample(df1, tf, _tf_offset(tf, MCX_HOUR_OFFSET))
+    except Exception:
+        return None
+
+
+def _tag_wave(ev: dict, cbars) -> str | None:
+    """Attach wave context to an event in place; return a chart path if any.
+
+    Tagging is strictly additive -- every exception here is swallowed, because
+    an alert that fires without wave tags is far better than one that never
+    fires because a pivot search blew up on a thin symbol.
+    """
+    if not config.WAVE_ENABLED or cbars is None:
+        return None
+    try:
+        ts = pd.Timestamp(ev.get("retouch_ts") or ev["formation_ts"])
+        wc = wave.context(cbars, ts, ev["direction"], key=ev["ticker"])
+        ev["grade"] = wave.grade(wc)
+        if wc is None:
+            return None
+        ev["wave_context"] = {k: wc[k] for k in
+                              ("wave", "leg_dir", "where", "agrees", "score", "span")}
+        return wavechart.render(ev, wc, cbars)
+    except Exception as exc:
+        logger.warning("wave context failed for %s/%s (%s)",
+                       ev.get("ticker"), ev.get("tf"), exc)
+        return None
+
+
+def _check_ob(ticker: str, tf: str, tdf, seen: set, cbars=None) -> int:
     """Order blocks, scanned independently of the thrust-retest pattern."""
     if not config.OB_ENABLED or tf not in config.OB_TIMEFRAMES:
         return 0
@@ -167,8 +207,9 @@ def _check_ob(ticker: str, tf: str, tdf, seen: set) -> int:
         if key in seen:
             continue
         seen.add(key)
+        chart = _tag_wave(ev, cbars)
         logger.info("OB %s", ev)
-        notifier.send_ob_alert(ev)
+        notifier.send_ob_alert(ev, chart=chart)
         sent += 1
     return sent
 
@@ -265,7 +306,8 @@ def run():
                 for ticker, df1 in history.items():
                     tdf = _completed(data_feed.resample(df1, tf, off), close_time)
                     new_alerts += _check_and_alert(ticker, tf, tdf, seen)
-                    ob_alerts += _check_ob(ticker, tf, tdf, seen)
+                    ob_alerts += _check_ob(ticker, tf, tdf, seen,
+                                           daily_history.get(ticker))
                 last_run[("eq", tf)] = close_time
                 logger.info("scanned equity tf=%s at %s, %d new alert(s), %d OB alert(s)",
                             tf, close_time, new_alerts, ob_alerts)
@@ -284,7 +326,8 @@ def run():
                     tdf = _completed(data_feed.resample(df1, tf, off), close_time)
                     new_alerts += _check_and_alert(ticker, tf, tdf, seen,
                                                    session_open_hm=config.MCX_OPEN_HM)
-                    ob_alerts += _check_ob(ticker, tf, tdf, seen)
+                    ob_alerts += _check_ob(ticker, tf, tdf, seen,
+                                           _mcx_context(df1))
                 last_run[("mcx", tf)] = close_time
                 logger.info("scanned mcx tf=%s at %s, %d new alert(s), %d OB alert(s)",
                             tf, close_time, new_alerts, ob_alerts)
@@ -300,7 +343,7 @@ def run():
             new_alerts = ob_alerts = 0
             for ticker, ddf in daily_history.items():
                 new_alerts += _check_and_alert(ticker, "1D", ddf, seen)
-                ob_alerts += _check_ob(ticker, "1D", ddf, seen)
+                ob_alerts += _check_ob(ticker, "1D", ddf, seen, ddf)
             today_key = now_ist.date().isoformat()
             last_run[("eq", "1D")] = today_key
             logger.info("scanned tf=1D for %s, %d new alert(s), %d OB alert(s)",

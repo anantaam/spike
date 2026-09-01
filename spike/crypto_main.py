@@ -21,7 +21,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import binance_feed, config, detector, notifier, ob_detector
+import pandas as pd
+
+from . import binance_feed, config, detector, notifier, ob_detector, wave, wavechart
 
 TF_MINUTES = {"5min": 5, "15min": 15, "1h": 60, "1D": 1440}
 GRACE_SECONDS = 20        # let Binance settle the candle before asking for it
@@ -63,6 +65,50 @@ def _boundary(now: datetime, tf: str) -> datetime:
     return now.replace(hour=floored // 60, minute=floored % 60, second=0, microsecond=0)
 
 
+_ctx_cache: dict = {}
+
+
+def _context(symbol: str, tf: str, df):
+    """Daily bars for the wave count, one fetch per symbol per UTC day.
+
+    A crypto day is a UTC day and Binance serves 1000 of them per call, so
+    unlike MCX there is no rollover problem and no need to resample -- the
+    daily series is just another public klines request.
+    """
+    if not config.WAVE_ENABLED:
+        return None
+    ctf = config.WAVE_CONTEXT_TF.get("crypto", "1D")
+    if tf == ctf:
+        return df
+    today = datetime.now(timezone.utc).date()
+    hit = _ctx_cache.get(symbol)
+    if hit is None or hit[0] != today:
+        bars = binance_feed.fetch_with_retry(symbol, ctf)
+        if bars is None:
+            return hit[1] if hit else None
+        _ctx_cache[symbol] = (today, bars)
+    return _ctx_cache[symbol][1]
+
+
+def _tag_wave(ev: dict, cbars) -> str | None:
+    """Wave tags + chart. Additive only -- never blocks an alert."""
+    if cbars is None:
+        return None
+    try:
+        ts = pd.Timestamp(ev.get("retouch_ts") or ev["formation_ts"])
+        wc = wave.context(cbars, ts, ev["direction"], key=ev["ticker"])
+        ev["grade"] = wave.grade(wc)
+        if wc is None:
+            return None
+        ev["wave_context"] = {k: wc[k] for k in
+                              ("wave", "leg_dir", "where", "agrees", "score", "span")}
+        return wavechart.render(ev, wc, cbars)
+    except Exception as exc:
+        logger.warning("wave context failed for %s/%s (%s)",
+                       ev.get("ticker"), ev.get("tf"), exc)
+        return None
+
+
 def _check(symbol: str, tf: str, df, seen: set) -> tuple[int, int]:
     # Crypto posts to its own channel or nowhere. Deliberately NO fallback to
     # the equity webhook: silently mixing 24/7 crypto alerts into the F&O
@@ -101,9 +147,10 @@ def _check(symbol: str, tf: str, df, seen: set) -> tuple[int, int]:
             if key in seen:
                 continue
             seen.add(key)
+            chart = _tag_wave(ev, _context(symbol, tf, df))
             logger.info("OB %s", ev)
             if hook:
-                notifier.send_ob_alert(ev, hook)
+                notifier.send_ob_alert(ev, hook, chart)
                 ob_n += 1
             else:
                 logger.warning("no crypto webhook -- logged only, NOT sent: %s/%s %s",

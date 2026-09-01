@@ -20,10 +20,12 @@ def _level_note(bars: int) -> str:
     return f"broke a {bars}-bar high/low"
 
 
-def _post(msg: str, webhook: str | None = None) -> None:
+def _post(msg: str, webhook: str | None = None, chart: str | None = None) -> None:
     webhook = webhook or config.DISCORD_WEBHOOK_URL
     if not webhook:
         logger.warning("SPIKE_DISCORD_WEBHOOK_URL not set -- not sent: %s", msg)
+        return
+    if chart and _post_with_chart(msg, webhook, chart):
         return
     try:
         req = urllib.request.Request(
@@ -35,24 +37,75 @@ def _post(msg: str, webhook: str | None = None) -> None:
         logger.warning("Discord post failed: %s", exc)
 
 
-def send_ob_alert(ev: dict, webhook: str | None = None) -> None:
+def _post_with_chart(msg: str, webhook: str, chart: str) -> bool:
+    """Multipart upload so the chart renders inline under the text.
+
+    Returns False on any failure so the caller falls back to a plain text
+    post -- an alert without its picture still beats no alert. requests is
+    already a dependency and handles multipart in one line; hand-rolling it
+    over urllib would be a page of boundary bookkeeping for nothing.
+    """
+    try:
+        import requests
+        with open(chart, "rb") as fh:
+            resp = requests.post(
+                webhook,
+                data={"payload_json": json.dumps({"content": msg[:1900]})},
+                files={"file": ("chart.png", fh, "image/png")},
+                headers={"User-Agent": "spike-scanner/1.0"}, timeout=20)
+        if resp.status_code < 300:
+            return True
+        logger.warning("Discord chart post rejected (%s) -- retrying text-only",
+                       resp.status_code)
+    except Exception as exc:
+        logger.warning("Discord chart post failed (%s) -- retrying text-only", exc)
+    return False
+
+
+def _wave_lines(ev: dict) -> str:
+    """The wave-context block, or nothing at all when there is no count.
+
+    Two facts drive it: which wave the retouch landed in, and whether the block
+    pushes with the leg or against it. When it opposes, the tradeable read is
+    the BREAK of the zone rather than the bounce off it -- so the side named
+    here flips. That is the failed-auction case, and it is stated in words
+    because a bare direction arrow cannot carry it.
+    """
+    wc = ev.get("wave_context")
+    if not wc:
+        return ""
+    bull = ev["direction"] == "bullish"
+    if wc["agrees"]:
+        side, plan = ("LONG" if bull else "SHORT"), "expect the zone to HOLD"
+        stance = "agrees with"
+    else:
+        side, plan = ("SHORT" if bull else "LONG"), "expect the zone to FAIL"
+        stance = "opposes"
+    return (f"**wave {wc['wave']} of 5** · leg running {wc['leg_dir']} · {wc['where']}\n"
+            f"retouch {stance} the leg → {side} · {plan}\n")
+
+
+def send_ob_alert(ev: dict, webhook: str | None = None,
+                  chart: str | None = None) -> None:
     """Order block formation/retouch. Formation is the cue to check the wave
     count; retouch is the actual entry trigger -- so they're visually distinct."""
     arrow = "▲" if ev["direction"] == "bullish" else "▼"
+    grade = f"  `[{ev['grade']}]`" if ev.get("grade") else ""
     if ev["event"] == "formation":
-        head = f"📦 **{ev['ticker']}** [{ev['tf']}] {arrow} OB FORMED — check wave count"
+        head = f"📦 **{ev['ticker']}** [{ev['tf']}] {arrow} OB FORMED — check wave count{grade}"
         when = f"swing {ev['swing_ts']} -> broke {ev['formation_ts']}"
     else:
-        head = f"🎯 **{ev['ticker']}** [{ev['tf']}] {arrow} OB RETOUCH — entry trigger"
+        head = f"🎯 **{ev['ticker']}** [{ev['tf']}] {arrow} OB RETOUCH — entry trigger{grade}"
         when = f"formed {ev['formation_ts']}, retouched {ev['retouch_ts']}"
     vol = f", vol_spike {ev['vol_spike']}x" if ev.get("vol_spike") is not None else ""
     _post(
         f"{head}\n"
+        f"{_wave_lines(ev)}"
         f"zone: {ev['zone_lo']}-{ev['zone_hi']}  entry: {ev['entry']}  stop: {ev['stop']}  "
         f"risk: {ev['risk_pct']}%\n"
         f"{_level_note(ev.get('break_lookback', 0))}, move {ev['move_pct']}%\n"
         f"{when}{vol}",
-        webhook,
+        webhook, chart,
     )
 
 

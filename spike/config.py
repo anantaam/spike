@@ -174,3 +174,41 @@ KITE_TIMEOUT_SECONDS = float(_env("SPIKE_KITE_TIMEOUT", "20"))
 # Minimum bars needed before a timeframe is trusted for detection (must clear
 # LEVEL_LOOKBACK + BASE_MAX with margin)
 MIN_BARS_REQUIRED = LEVEL_LOOKBACK + BASE_MAX + 30
+
+
+# --------------------------------------------------------------- wave context
+# Elliott context attached to order-block alerts. Tagging only: a missing or
+# low-scoring count never suppresses an alert, it just leaves the tags off.
+WAVE_ENABLED = _env("SPIKE_WAVE_ENABLED", "1") not in ("0", "false", "False")
+# The degree rule, in bars from P0 to the current bar. This is the user's own
+# method made explicit: pick the timeframe on which the count spans this many
+# bars. It is scale-free, so the same band works on daily and on 4h.
+WAVE_SPAN_LO = int(_env("SPIKE_WAVE_SPAN_LO", "100"))
+WAVE_SPAN_HI = int(_env("SPIKE_WAVE_SPAN_HI", "140"))
+WAVE_MIN_LEG_ATR = float(_env("SPIKE_WAVE_MIN_LEG_ATR", "1.0"))
+# How stale wave 4 may be and still count as a live setup, in context bars.
+WAVE_MAX_W4_AGE = int(_env("SPIKE_WAVE_MAX_W4_AGE", "15"))
+
+# Which timeframe the count is read on, per segment.
+#   equity/crypto: daily -- matches the prototype the payoff study was run on.
+#   commodity: 4h, because MCX contracts roll monthly. A front-month contract
+#     carries only ~90-120 daily bars and a third of those printed zero volume
+#     before the contract became liquid, so a 100-140 DAILY count there would
+#     be fitted largely to untraded bars. 4h resampled from the 1-min cache
+#     gives ~180 real bars within one contract's liquid life. Smaller degree
+#     than the equity counts -- read commodity wave tags accordingly.
+#     Coverage measured 2026-09-01 on the live universe: equity 19/40 names
+#     carry a count, commodity 4/16 contracts, crypto 3/10 pairs on 1D (12h
+#     would give 5/10, 4h 4/10). Higher coverage is NOT the reason to switch:
+#     every timeframe can produce a 100-140 bar span by construction, so the
+#     band cannot select the timeframe -- the degree you actually trade does,
+#     and 1D is the degree the payoff study was run on. Override per segment
+#     with SPIKE_WAVE_CONTEXT_TF="crypto=12h,commodity=4h" if that changes.
+WAVE_CONTEXT_TF = {"equity": "1D", "crypto": "1D", "commodity": "4h"}
+WAVE_CONTEXT_TF.update(
+    {k.strip(): v.strip() for k, v in
+     (pair.split("=", 1) for pair in _env("SPIKE_WAVE_CONTEXT_TF", "").split(",") if "=" in pair)})
+
+# Chart attached to each wave-tagged alert. Costs ~0.3s and one matplotlib
+# import per alert; render failure is non-fatal and falls back to text-only.
+OB_CHART_ENABLED = _env("SPIKE_OB_CHART", "1") not in ("0", "false", "False")
